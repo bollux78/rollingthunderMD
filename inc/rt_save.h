@@ -11,4 +11,6 @@ typedef struct {u8 slots[2][64],available;} RT_SaveReset;
 void RT_saveResetExport(RT_SaveReset *state);
 void RT_saveResetImport(const RT_SaveReset *state);
 extern volatile u8 rtSaveAvailable;
+/* Publish this build's reset marker only after persistent state is loaded. */
+void RT_resetMarkReady(void);
 #endif

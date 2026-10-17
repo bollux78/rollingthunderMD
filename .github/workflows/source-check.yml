@@ -10,5 +10,6 @@ jobs:
           python-version: '3.12'
       - run: python tools/audit_repo.py
       - run: python -m compileall -q tools tests
+      - run: python tests/test_cart_boot.py
       - run: cc -Wall -Wextra -Werror -Itests/host -Iinc src/save.c tests/test_save.c -o /tmp/test-save && /tmp/test-save
 # Building needs an owner-supplied arcade ROM. It is not stored in CI or secrets.

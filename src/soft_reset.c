@@ -4,18 +4,32 @@
 extern u8 _start, _bend;
 extern VoidCallback *intCB;
 extern void __real__reset_entry(void);
+static volatile u32 resetCookie[3];
+static void defaultInterrupt(void) {}
 
-/* SGDK warm reset deliberately retains application globals. This game needs
- * cold application state (DMA/pipeline owners, pause, menus and audio), while
- * retaining only the committed save mirror. Called by boot/sega.s with IRQs
- * masked, Z80 halted and a fresh supervisor stack above .data/.bss. */
+void RT_resetMarkReady(void)
+{
+    resetCookie[0]=0;
+    resetCookie[1]=~0x52544d44UL;
+    resetCookie[2]=(u32)&_stext ^ *(const vu16 *)0x18e;
+    resetCookie[0]=0x52544d44UL; /* publish only after save initialization */
+}
+
+/* Both cold entry and reset arrive after TMSS, with interrupts masked, Z80
+ * halted and a fresh stack. Flash-cart menus may leave arbitrary RAM and I/O.
+ * Retain only this build's committed save mirror, never an old callback. */
 __attribute__((externally_visible, noinline, noreturn))
 void __wrap__reset_entry(void)
 {
     RT_SaveReset saved;
-    VoidCallback *defaultInt=intCB;
-    RT_saveResetExport(&saved);
-    while(GET_VDP_STATUS(VDP_DMABUSY_FLAG));
+    bool warm=resetCookie[0]==0x52544d44UL && resetCookie[1]==~0x52544d44UL &&
+        resetCookie[2]==((u32)&_stext ^ *(const vu16 *)0x18e);
+    resetCookie[0]=0;
+    if(warm)RT_saveResetExport(&saved);
+    /* On a genuine reset the VDP may still own a DMA source. On cold entry,
+     * avoid touching it until after RAM initialization: early VDP reads can
+     * lock real consoles. SDK internal_reset waits again after initialization. */
+    if(warm)while(GET_VDP_STATUS(VDP_DMABUSY_FLAG));
     /* The prior PCM owner may have replaced window 1. Restore fixed ROM data
      * before copying the .data image; this function executes in window 0. */
     *(vu8 *)0xa130f3=1;
@@ -23,11 +37,16 @@ void __wrap__reset_entry(void)
     while(dst<&_bend)*dst++=0;
     const u8 *src=(const u8 *)&_stext;
     dst=(vu8 *)RAM;
-    for(u32 n=(u32)&_sdata;n;n--)*dst++=*src++;
+    /* GCC 16 can combine *dst++=*src++ into one instruction that evaluates
+     * the destination after incrementing the shared source address register.
+     * Keep the accesses separate, as in our guarded Z80 uploader. */
+    for(u32 n=(u32)&_sdata;n;n--)
+        __asm__ volatile("move.b (%0)+,%%d0\n\tmove.b %%d0,(%1)+"
+                         : "+a"(src), "+a"(dst) : : "d0", "memory");
     /* Unlike _start_entry, we keep the active stack intact. The SDK reset
      * below rebuilds heap, DMA, VDP, sound and callbacks after global reset. */
-    intCB=defaultInt;
-    RT_saveResetImport(&saved);
+    intCB=defaultInterrupt;
+    if(warm)RT_saveResetImport(&saved);
     __real__reset_entry();
     while(TRUE);
 }

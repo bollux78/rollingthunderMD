@@ -1,64 +1,81 @@
-# Soft-reset save restoration validation
-
-**Hardware limitation:** these passing checks apply to PicoDrive. The subsequent
-[compatibility audit](HARDWARE_COMPATIBILITY.md) reproduces GX boot failure and
-identifies cartridge-capacity, SRAM-protocol and startup blockers for hardware.
+# Startup, SRAM and reset validation — October 17, 2026
 
 Cartridge: `RollingThunderMD.bin`, 33,554,432 bytes (32 MiB).
 
-SHA256: `133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8`
+SHA256: `58a62d053a9f10a0f610b3e7fce55593693cca90738d3e946d6ee6c066864412`
 
-- Owner-ROM source build succeeds; all 10 stage banks reproduce. The complete
-  31 MiB banked art/audio region matches the preceding SRAM/pause build exactly.
-- 30 real PicoDrive soft resets pass: six each in Arcade, Campaign 1P/2P and
-  Survival 1P/2P. No ROM reloads or savestates are used between those resets.
-- Reset from the playing sound test, title menu, paused gameplay and active
-  gameplay restores best score, all initials, credits and PSG mute. Repeated
-  resets and new saves/settings changes after reset pass as well.
-- Reset returns to an unpaused menu; the next game updates and plays music.
-  Uncommitted live score changes are discarded in favor of the last save.
-  Restoring a save does not rewrite SRAM. No runtime faults occurred.
-- Host tests cover both CRC-protected slots, all 65 interrupted SRAM-write
-  boundaries, invalid/empty/unwritable storage, and warm restoration with SRAM
-  reads explicitly forbidden. A corrupt mirror slot falls back to its partner.
-- Fresh-core cold boots still restore controller-changed credits/PSG settings,
-  best score and initials. Corrupting the newest SRAM slot recovers the old one.
-- Campaign/Survival pause tests still pass in 1P/2P, including controller-two
-  pause in co-op. Gameplay memory and screen digests remain frozen during pause;
-  maximum update lag after resume is two refreshes, with no catch-up burst.
+The development cartridge passes the emulator checks below. It remains too
+large for the documented retail EverDrive capacities; no physical hardware was
+tested. See [hardware compatibility](HARDWARE_COMPATIBILITY.md).
 
-Scores/initials were seeded in work RAM to reach save boundaries without a full
-campaign. Settings were changed by controller. ROM code was not patched. These
-checks are not a full natural playthrough, hardware certification or a new FPS
-claim. See `validation.json` for the exact ROM/core hashes and per-mode results.
+- The owner-ROM build reproduces all ten frozen stage banks. All 31 MiB of
+  banked graphics/audio match the preceding build byte for byte.
+- US NTSC, European PAL and Japanese NTSC opening Campaign 2P, P2 pause/resume,
+  reset and restart pass in both PicoDrive and Genesis Plus GX.
+- Three additional GX launches with `$A5` work RAM and initialized controller
+  registers pass the same checks. All 104 initialized-data bytes exactly match
+  the ROM image at the first SDK reset operation, in cold and dirty launches.
+- Sixty real soft resets pass: six in Arcade, Campaign 1P/2P and Survival 1P/2P,
+  on each core. No ROM reloads or savestates occur between those resets.
+- Playing sound-test, menu, paused-game and active-game resets restore the last
+  committed best score, initials, starting credits and PSG mute. New saves and
+  changed settings still work after repeated resets. Live uncommitted scores
+  are discarded; restoring the save does not rewrite it.
+- Fresh-process cold boots on both cores restore settings, best score and
+  initials from real SRAM. Corrupting the newest slot recovers its predecessor.
+- GX Team Player 3-button and 6-button modes pass startup and three resets
+  each while B/Up are held. Detection, active Team Player support and received
+  button state are checked. The previous runtime (with only its header corrected)
+  fails reset liveness in this probe. No physical adapter was tested.
+- Host tests cover all 65 interrupted SRAM-write boundaries, bad/empty/read-only
+  storage, warm restoration with SRAM reads forbidden and corrupt-mirror fallback.
+- Boot-adaptation tests verify that TMSS precedes the reset wrapper, unrelated
+  vector/interrupt text is retained, and unrecognized SDK startup is rejected.
 
-## Reset implementation
+Scores/initials are seeded in work RAM to exercise save boundaries. Settings
+are changed by controller. These are not full natural playthroughs, hardware
+certification or new FPS measurements. `validation.json` and `compatibility.json`
+record the exact ROM/core hashes and results.
 
-Cold boot reads the existing two 64-byte, versioned, CRC32-protected SRAM slots.
-Successful saves also publish a two-slot RAM mirror, committing each marker last.
-The save format is unchanged, so existing SRAM files continue to work.
+## Implementation
 
-The linker wraps SGDK's warm-reset entry. With interrupts masked and the Z80
-halted, the wrapper retains only the committed save mirror on its fresh stack,
-waits for DMA, restores fixed ROM window 1, and reinitializes C data/BSS. SGDK
-then rebuilds heap, DMA, display, input and audio state. The loader validates the
-mirrored slots and restores the latest valid one. Old pause flags, callbacks,
-audio owners and in-flight rendering state cannot leak into the new session.
+The header now declares `SEGA MEGA DRIVE`. The runtime uses standard SSF2 bank
+registers plus standard odd-byte SRAM, which both tested cores support. The old
+`SEGA SSF` header wrongly selected GX's extended mapper and let a save-enable
+write remap bank zero. The conventional work-RAM header is `$00FF0000–$00FFFFFF`.
 
-This avoids runtime reads through [PicoDrive's SSF mapper](https://github.com/notaz/picodrive/blob/master/pico/carthw/carthw.c),
-which replaces bank-window SRAM read handlers with direct ROM mappings. Cold
-boot continues to read real SRAM; later saves continue to write real SRAM.
-Reset restores the last committed save rather than saving the interrupted game.
+Build-local startup assembly always performs the SDK TMSS check. Controller
+registers no longer select the warm path. The wrapper recognizes a same-build
+reset with a committed marker and retains only the CRC-validated save mirror.
+It clears C globals, copies initialized data, assigns a deterministic interrupt
+callback and lets the SDK reconstruct heap, DMA, display, input and audio.
+Cold startup avoids early VDP reads; genuine warm reset drains active DMA first.
+
+The initialized-data copy uses separate byte-read and byte-write instructions.
+GCC 16 otherwise combined the C loop into an instruction whose destination
+followed the incremented source register, shifting the data by one byte. Earlier
+warm-reset save tests masked this defect because the save restored settings
+later. The new GX probe compares the complete initial data image before SDK
+mutation, and defaults are checked on both cores.
+
+The Team Player reader now checks its optional callback before calling it,
+matching the Side Arms fix. Physical adapters were not tested. Save-file format,
+Start pause behavior, enemy counts, animation policy and audio assets are unchanged.
 
 ## Reproduce
 
 ```sh
 cc -Wall -Wextra -Werror -Itests/host -Iinc src/save.c tests/test_save.c -o /tmp/test-save
 /tmp/test-save
-python3 tests/test_soft_reset.py --core /path/to/picodrive_libretro.dylib
+python3 tests/test_cart_boot.py
+python3 tests/check_compatibility.py --picodrive /path/to/picodrive_libretro.dylib --gx /path/to/genesis_plus_gx_libretro.dylib
+python3 tests/test_soft_reset.py --core /path/to/core_libretro.dylib
+python3 tests/test_cold_save.py --core /path/to/core_libretro.dylib
+python3 tests/test_teamplayer_boot.py --core /path/to/genesis_plus_gx_libretro.dylib
 ```
 
-The emulator test uses `dist/RollingThunderMD.bin` and matching symbols in
-`.build/game/out/release/symbol.txt`; build first with your own arcade archive.
-It writes `.build/soft-reset-tests.json`. An installed PicoDrive core is required
-and is not bundled. Source CI runs host tests and Python syntax checks only.
+Build with an owner-supplied archive first. Emulator tests use `dist/RollingThunderMD.bin`
+and matching `.build/game/out/release/symbol.txt`. The compatibility command still
+returns 1 because the cartridge-size gate fails, even when all nine emulator
+cases pass. Source CI runs boot/host tests and syntax/audit checks; cores and
+ROMs are not bundled or provided to CI.

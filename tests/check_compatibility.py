@@ -49,6 +49,7 @@ def probe(args):
         region = m.core.retro_get_region()
         assert region == int(args.region == 'E'), 'Core selected wrong video region'
         events = []
+        data_init_checks = []
         if args.engine == 'gx':
             # Genesis Plus GX's exported 256-entry CPU map, as in Side Arms QA.
             class Map(C.Structure):
@@ -59,10 +60,23 @@ def probe(args):
             origin = maps[0].base
             write = C.CFUNCTYPE(None, C.c_uint, C.c_uint)
             io8, io16 = write(maps[0xa1].write8), write(maps[0xa1].write16)
+            symbols = {row[2]: int(row[0], 16)
+                       for line in args.symbols.read_text().splitlines()
+                       if len(row := line.split()) == 3}
+            start, length = symbols['_stext'], symbols['_sdata']
+            expected_data = bytes(data[start:start+length])
 
             def observe(original, address, value):
                 before = maps[0].base
                 original(address, value)
+                # SDK internal_reset's first operation is SRAM_disable. At
+                # this point the wrapper must have copied all initialized data
+                # exactly, before any SDK code mutates it. This catches the
+                # compiler's postincrement destination-address miscompilation.
+                if address == 0xa130f1 and value == 0 and not data_init_checks:
+                    actual = bytes(C.c_ubyte.from_address(m.ram + (i ^ 1)).value
+                                   for i in range(length))
+                    data_init_checks.append(dict(bytes=length, exact=actual == expected_data))
                 if address & 0xffff00 == 0xa13000 and len(events) < 256:
                     events.append(dict(frame=m.frame, address=hex(address), value=value,
                                        bank0_before=before-origin,
@@ -83,11 +97,14 @@ def probe(args):
         m.run(120)
         after = m.snapshot()
         progress = (after['vblanks'] - before['vblanks']) & 0xffffffff
-        boot = after['state'] == 0 and after['fault'] == 0 and 100 <= progress <= 125
+        boot = (after['state'] == 0 and after['fault'] == 0 and 100 <= progress <= 125
+                and m.number('rtHomeStartingCredits') == 6)
+        if args.engine == 'gx':
+            boot = boot and bool(data_init_checks) and all(r['exact'] for r in data_init_checks)
         result = dict(engine=args.engine, region_header=args.region,
                       video_region='PAL' if region else 'NTSC', dirty_launch=args.dirty,
                       boot_pass=boot, menu_vblank_progress=progress,
-                      after_boot=after, mapper_writes=events)
+                      after_boot=after, mapper_writes=events, data_init_checks=data_init_checks)
         if boot:
             try:
                 m.start('campaign_2p')

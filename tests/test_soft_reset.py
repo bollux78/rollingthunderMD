@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""PicoDrive libretro regression: real soft resets, no ROM reload or savestates.
+"""PicoDrive / Genesis Plus GX: real soft resets, no ROM reload or savestates.
 
-Requires a locally built cartridge, matching symbols, and an installed PicoDrive
+Requires a locally built cartridge, matching symbols, and an installed libretro
 core. Menu settings are changed by controller. Scores/initials are seeded in
 work RAM to exercise saves without completing a campaign. No ROM is modified.
 """
@@ -66,6 +66,11 @@ class Machine:
         core.retro_get_memory_size.restype = C.c_size_t
         self.ram = core.retro_get_memory_data(2)
         assert core.retro_get_memory_size(2) == 65536
+        if getattr(args, 'sram_load', None):
+            saved = args.sram_load.read_bytes()
+            assert core.retro_get_memory_size(0) >= len(saved)
+            assert core.retro_get_memory_data(0)
+            C.memmove(core.retro_get_memory_data(0), saved, len(saved))
         self.run(600)
 
     def read(self, symbol, length=1, offset=0):
@@ -91,7 +96,7 @@ class Machine:
 
     def sram(self):
         size = self.core.retro_get_memory_size(0)
-        assert size > 256
+        assert size >= 128, 'Core exposes less than the two 64-byte save slots'
         return C.string_at(self.core.retro_get_memory_data(0), size)
 
     def reset(self, best, records):
@@ -187,7 +192,7 @@ def main():
         results.append(row); print(row, flush=True)
     report = dict(rom_sha256=hashlib.sha256(args.rom.read_bytes()).hexdigest(),
                   core_sha256=hashlib.sha256(args.core.read_bytes()).hexdigest(),cases=results,
-                  scope='Real PicoDrive soft resets; controller menu changes; diagnostic RAM-seeded scores/initials; no savestates or ROM changes.')
+                  scope='Real libretro soft resets; controller menu changes; diagnostic RAM-seeded scores/initials; no savestates or ROM changes.')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2)+'\n')
 

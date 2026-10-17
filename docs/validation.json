@@ -1,7 +1,7 @@
 {
-  "rom_sha256": "133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8",
+  "rom_sha256": "58a62d053a9f10a0f610b3e7fce55593693cca90738d3e946d6ee6c066864412",
   "bytes": 33554432,
-  "previous_build_sha256": "c7efdd789711c4bc88a1cabc781070cac25586594221b53dafad38c3afeb02ef",
+  "previous_build_sha256": "133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8",
   "banked_bytes_identical_to_previous_build": true,
   "banked_bytes_compared": 32505856,
   "host_save_tests": {
@@ -12,72 +12,106 @@
     "unwritable_sram_detected": true
   },
   "soft_reset": {
-    "rom_sha256": "133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8",
-    "core_sha256": "0646e8d7896e27ee65073851bbd1daf713fb95fb63b7684103ed008518e84512",
-    "cases": [
-      {
-        "case": "arcade",
-        "soft_resets": 6,
-        "passed": true
-      },
-      {
-        "case": "campaign_1p",
-        "soft_resets": 6,
-        "passed": true
-      },
-      {
-        "case": "campaign_2p",
-        "soft_resets": 6,
-        "passed": true
-      },
-      {
-        "case": "survival_1p",
-        "soft_resets": 6,
-        "passed": true
-      },
-      {
-        "case": "survival_2p",
-        "soft_resets": 6,
-        "passed": true
-      }
-    ],
-    "scope": "Real PicoDrive soft resets; controller menu changes; diagnostic RAM-seeded scores/initials; no savestates or ROM changes."
-  },
-  "pause": {
-    "rom_sha256": "133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8",
-    "cases": {
-      "campaign_1p": {
-        "runtime_faults": 0,
-        "held_start_single_toggle": true,
-        "pause_resume_passed": true,
-        "max_lag": 2
-      },
-      "campaign_2p": {
-        "runtime_faults": 0,
-        "held_start_single_toggle": true,
-        "pause_resume_passed": true,
-        "max_lag": 2
-      },
-      "survival_1p": {
-        "runtime_faults": 0,
-        "held_start_single_toggle": true,
-        "pause_resume_passed": true,
-        "max_lag": 2
-      },
-      "survival_2p": {
-        "runtime_faults": 0,
-        "held_start_single_toggle": true,
-        "pause_resume_passed": true,
-        "max_lag": 2
-      }
+    "gx": {
+      "rom_sha256": "58a62d053a9f10a0f610b3e7fce55593693cca90738d3e946d6ee6c066864412",
+      "core_sha256": "88314cd8554a3cc5eebf00a4139e6f0dee9ea579dcb2321a0959579f1902fa09",
+      "cases": [
+        {
+          "case": "arcade",
+          "soft_resets": 6,
+          "passed": true
+        },
+        {
+          "case": "campaign_1p",
+          "soft_resets": 6,
+          "passed": true
+        },
+        {
+          "case": "campaign_2p",
+          "soft_resets": 6,
+          "passed": true
+        },
+        {
+          "case": "survival_1p",
+          "soft_resets": 6,
+          "passed": true
+        },
+        {
+          "case": "survival_2p",
+          "soft_resets": 6,
+          "passed": true
+        }
+      ],
+      "scope": "Real libretro soft resets; controller menu changes; diagnostic RAM-seeded scores/initials; no savestates or ROM changes."
+    },
+    "pico": {
+      "rom_sha256": "58a62d053a9f10a0f610b3e7fce55593693cca90738d3e946d6ee6c066864412",
+      "core_sha256": "0646e8d7896e27ee65073851bbd1daf713fb95fb63b7684103ed008518e84512",
+      "cases": [
+        {
+          "case": "arcade",
+          "soft_resets": 6,
+          "passed": true
+        },
+        {
+          "case": "campaign_1p",
+          "soft_resets": 6,
+          "passed": true
+        },
+        {
+          "case": "campaign_2p",
+          "soft_resets": 6,
+          "passed": true
+        },
+        {
+          "case": "survival_1p",
+          "soft_resets": 6,
+          "passed": true
+        },
+        {
+          "case": "survival_2p",
+          "soft_resets": 6,
+          "passed": true
+        }
+      ],
+      "scope": "Real libretro soft resets; controller menu changes; diagnostic RAM-seeded scores/initials; no savestates or ROM changes."
     }
   },
-  "persistence": {
-    "rom_sha256": "133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8",
-    "controller_settings_roundtrip": true,
-    "cold_boot_best_and_initials": true,
-    "corrupt_newest_slot_fallback": true,
-    "scope": "Real PicoDrive SRAM across fresh core processes. Settings changed by controller. Best score/table seeded by diagnostic RAM writes, then saved by production pause path. No savestates."
+  "cold_persistence": {
+    "gx": {
+      "rom_sha256": "58a62d053a9f10a0f610b3e7fce55593693cca90738d3e946d6ee6c066864412",
+      "core_sha256": "88314cd8554a3cc5eebf00a4139e6f0dee9ea579dcb2321a0959579f1902fa09",
+      "cold_restore_pass": true,
+      "corrupt_slot_fallback_pass": true,
+      "scope": "Three fresh core processes; controller settings, RAM-seeded score and initials saved through P2 pause; real SRAM, no savestates."
+    },
+    "pico": {
+      "rom_sha256": "58a62d053a9f10a0f610b3e7fce55593693cca90738d3e946d6ee6c066864412",
+      "core_sha256": "0646e8d7896e27ee65073851bbd1daf713fb95fb63b7684103ed008518e84512",
+      "cold_restore_pass": true,
+      "corrupt_slot_fallback_pass": true,
+      "scope": "Three fresh core processes; controller settings, RAM-seeded score and initials saved through P2 pause; real SRAM, no savestates."
+    }
   },
-  "limits": "PicoDrive emulator validation; no physical-hardware certification or full natural playthrough. Score/initials tests use diagnostic work-RAM seeding, followed by real production saves and resets."
+  "team_player": {
+    "core": "genesis_plus_gx",
+    "core_sha256": "88314cd8554a3cc5eebf00a4139e6f0dee9ea579dcb2321a0959579f1902fa09",
+    "device_ids": [
+      1537,
+      1793
+    ],
+    "held_buttons": [
+      "B",
+      "Up"
+    ],
+    "normal_pad_on_second_port": false,
+    "adapter_detected_and_reader_enabled": true,
+    "held_state_observed": true,
+    "soft_resets_per_device": 3,
+    "passed": true,
+    "baseline_result": "Previous runtime with corrected header failed reset liveness; no physical adapter tested."
+  },
+  "physical_hardware_tested": false,
+  "hardware_ready": false,
+  "remaining_blocker": "32 MiB image exceeds retail cart capacities; hardware mapper profile and device validation pending."
 }

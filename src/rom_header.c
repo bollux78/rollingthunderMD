@@ -4,9 +4,8 @@ __attribute__((externally_visible))
 const ROMHeader rom_header = {
 #if (MODULE_MEGAWIFI  && (MEGAWIFI_IMPLEMENTATION == MEGAWIFI_IMPLEMENTATION_MW_CART))
     "SEGA MEGAWIFI   ",
-#elif (ENABLE_BANK_SWITCH != 0)
-    "SEGA SSF        ",
 #else
+    /* Standard SSF2 bank registers + SRAM, not Krikzz's extended SSF. */
     "SEGA MEGA DRIVE ",
 #endif
     "(C)SGDK 2024    ",
@@ -21,8 +20,8 @@ const ROMHeader rom_header = {
 #else
     0x000FFFFF,
 #endif
-    0xE0FF0000,
-    0xE0FFFFFF,
+    0x00FF0000,
+    0x00FFFFFF,
     "RA",
     0xF820,
     0x00200001,

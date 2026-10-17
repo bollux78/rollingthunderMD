@@ -551,6 +551,7 @@ int main(bool hardReset){
     RT_resetSession();
     u8 muted=0;
     RT_saveLoad(highRecords,&score.high,&rtHomeStartingCredits,&muted);
+    RT_resetMarkReady();
     RT_gameMusicSetPsgMuted(muted);menu();
     while(TRUE){
         if(finalMusic.active && !serviceFinalMusic()){

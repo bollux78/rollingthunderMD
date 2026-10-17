@@ -21,8 +21,8 @@ voice samples, or rendered music clips are included. You must supply your own
 **Rolling Thunder revision 3 arcade `rthunder.zip`** to regenerate the audio.
 There are no ROM downloads in the build process. Input chip hashes are checked.
 The Sega splash/chant and Namcot splash/logo are omitted entirely; the binary
-boots directly into the game menu. The `SEGA SSF` cartridge-header identifier
-remains because it declares the mapper to emulators/hardware, not a logo asset.
+boots directly into the game menu. The `SEGA MEGA DRIVE` cartridge-header
+identifier is format metadata, not a logo asset.
 
 ## Build
 
@@ -54,7 +54,7 @@ are ignored. The build reads the supplied archive; it never modifies it.
 
 Outputs:
 
-- `dist/RollingThunderMD.bin` — 32 MiB SSF-mapper development cartridge
+- `dist/RollingThunderMD.bin` — 32 MiB standard-SSF2 development cartridge
 - `dist/SHA256SUMS` — binary checksum
 - `dist/build.json` — build identity and validation metadata
 
@@ -71,12 +71,13 @@ banks are assembled from those new outputs.
 
 ## Playing and validation
 
-Use an emulator with **32 MiB SSF mapper support**. The tested core is PicoDrive.
+Use an emulator with **32 MiB standard SSF2 banking and SRAM support**.
+PicoDrive and Genesis Plus GX are tested.
 A 4 MiB-only loader cannot run this cartridge. **The current image is not ready
 for EverDrive/original-console release:** it exceeds the documented capacities
-of current EverDrive models, and its SRAM protocol fails under Genesis Plus GX's
-extended mapper. See the [hardware compatibility audit](docs/HARDWARE_COMPATIBILITY.md)
-for reproduced failures, Side Arms comparisons and outstanding hardware tests.
+of current EverDrive models. The former GX SRAM/boot failure is fixed; actual
+flash-cart mapper support still needs validation after repacking. See the [hardware compatibility audit](docs/HARDWARE_COMPATIBILITY.md)
+for Side Arms comparisons, remaining limits and outstanding hardware tests.
 This is a development build, not a full-game release certification.
 Standard Genesis controller inputs are used; Home's setup lets
 player two join before choosing the characters.
@@ -101,8 +102,9 @@ best score. Progress/lives are not resumed from SRAM. Empty or invalid SRAM
 uses defaults; two CRC-checked slots protect against interrupted writes. Enable
 battery saves in your emulator and retain its `.srm` file. Soft reset returns to the menu and restores the last committed save, including
 after playing or pausing. The cartridge currently requires
-SSF banking **and** standard odd-byte SRAM at `$200001–$20FFFF`; that combination
-is validated in PicoDrive only and needs redesign for the hardware mapper.
+standard SSF2 banking **and** standard odd-byte SRAM at `$200001–$20FFFF`.
+This combination is validated in PicoDrive and Genesis Plus GX. An extended
+EverDrive SSF profile would need its own banked-save implementation.
 
 The public build removes boot intros, updates the cartridge title, and adds
 SRAM saves and Start pause. The frozen banked art/audio remain unchanged. See

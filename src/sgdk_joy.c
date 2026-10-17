@@ -962,7 +962,7 @@ static void readTeamPlayer(u16 port)
             joyType[xlt] = typ;
             change = joyState[xlt] ^ val;
             joyState[xlt] = val;
-            if (change) joyEventCB(xlt, change, val);
+            if (joyEventCB && change) joyEventCB(xlt, change, val);
         }
     }
 
