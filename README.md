@@ -72,9 +72,13 @@ banks are assembled from those new outputs.
 ## Playing and validation
 
 Use an emulator with **32 MiB SSF mapper support**. The tested core is PicoDrive.
-A 4 MiB-only loader cannot run this cartridge. Physical-cartridge compatibility
-has not been certified. This is a development build, not a full-game release
-certification. Standard Genesis controller inputs are used; Home's setup lets
+A 4 MiB-only loader cannot run this cartridge. **The current image is not ready
+for EverDrive/original-console release:** it exceeds the documented capacities
+of current EverDrive models, and its SRAM protocol fails under Genesis Plus GX's
+extended mapper. See the [hardware compatibility audit](docs/HARDWARE_COMPATIBILITY.md)
+for reproduced failures, Side Arms comparisons and outstanding hardware tests.
+This is a development build, not a full-game release certification.
+Standard Genesis controller inputs are used; Home's setup lets
 player two join before choosing the characters.
 
 The frozen adaptive build passed 48 opening performance runs, 20 stage/checkpoint
@@ -96,8 +100,9 @@ entry and when you pause. Pause before powering off to save an ongoing run's
 best score. Progress/lives are not resumed from SRAM. Empty or invalid SRAM
 uses defaults; two CRC-checked slots protect against interrupted writes. Enable
 battery saves in your emulator and retain its `.srm` file. Soft reset returns to the menu and restores the last committed save, including
-after playing or pausing. The cartridge requires
-SSF banking **and** standard odd-byte SRAM at `$200001–$20FFFF`.
+after playing or pausing. The cartridge currently requires
+SSF banking **and** standard odd-byte SRAM at `$200001–$20FFFF`; that combination
+is validated in PicoDrive only and needs redesign for the hardware mapper.
 
 The public build removes boot intros, updates the cartridge title, and adds
 SRAM saves and Start pause. The frozen banked art/audio remain unchanged. See

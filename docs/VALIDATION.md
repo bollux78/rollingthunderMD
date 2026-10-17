@@ -1,5 +1,9 @@
 # Soft-reset save restoration validation
 
+**Hardware limitation:** these passing checks apply to PicoDrive. The subsequent
+[compatibility audit](HARDWARE_COMPATIBILITY.md) reproduces GX boot failure and
+identifies cartridge-capacity, SRAM-protocol and startup blockers for hardware.
+
 Cartridge: `RollingThunderMD.bin`, 33,554,432 bytes (32 MiB).
 
 SHA256: `133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8`
