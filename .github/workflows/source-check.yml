@@ -1,0 +1,13 @@
+name: Source package checks
+on: [push, pull_request]
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python tools/audit_repo.py
+      - run: python -m compileall -q tools
+# Building needs an owner-supplied arcade ROM. It is not stored in CI or secrets.

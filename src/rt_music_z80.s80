@@ -1,0 +1,2803 @@
+; Rolling Thunder MD -- Z80 music driver.
+; Port of the native source sequencer (music_sequence.c, music_control.c,
+; music_clock.c, music_registers.c) and the YM2151 -> YM2612/PSG translation
+; (opn_music.c). The 68000 only posts commands in the mailbox at $1F00.
+; Music data + translation tables: tools/audio/build_music_z80_blob.c, read
+; through the 32 KB bank window ($8000). Clock: YM2612 Timer A at the DAC
+; rate, 10 x 18.77 us = 5326.7 Hz. Timer B (300.4 us) is the time reference:
+; it adds 16/10 samples to OWED, so a late poll drops samples instead of
+; slowing playback, and every 55th tick is a music service (60.53 Hz).
+; Samples: the arcade 63701X's two lanes (sound bytes: bit 5 lane, bit 6 bank
+; 0/2, bits 0-4 clip), mixed on the YM2612 DAC (channel 6) from RAM buffers
+; refilled from rtVoiceZ80Blob (tools/audio/build_voice_z80_blob.py).
+
+YM_A0       EQU $4000
+YM_D0       EQU $4001
+YM_A1       EQU $4002
+YM_D1       EQU $4003
+BANKREG     EQU $6000
+PSGPORT     EQU $7F11
+
+; ---- mailbox (68000 <-> Z80)
+CMDTRACK    EQU $1F00           ; 0 stop, 1..13 play
+CMDSEQ      EQU $1F01           ; 68000 bumps to post CMDTRACK
+CMDPSG      EQU $1F02           ; nonzero: silence PSG-routed parts
+BANKLO      EQU $1F04           ; blob address >> 15, low 8 bits
+BANKHI      EQU $1F05           ; bit 8
+BANKOK      EQU $1F06           ; $5A once BANKLO/HI are valid
+STATOUT     EQU $1F08           ; 1 while a track is sounding
+ALIVE       EQU $1F09           ; service counter (word)
+VBANKLO     EQU $1F0C           ; voice blob address >> 15, low 8 bits
+VBANKHI     EQU $1F0D           ; bit 8
+SFXRING     EQU $1F10           ; 16 sound bytes posted by the 68000
+SFXWR       EQU $1F20           ; 68000 write index (mod 16)
+PROTECT     EQU $1F30           ; 68000: a DMA is about to run / running
+PROTACK     EQU $1F31           ; Z80: parked, no ROM access until PROTECT clears
+
+; ---- per-source records: 32 bytes at SRC + source*32
+SRC         EQU $1800
+F_RL        EQU 0
+F_KC        EQU 1
+F_KF        EQU 2
+F_PMSAMS    EQU 3
+F_STAGE     EQU 4
+F_TL        EQU 5
+F_D1R       EQU 6
+F_D2R       EQU 7
+F_D1LRR     EQU 8
+F_PSGATT    EQU 9
+F_ENV       EQU 10              ; word
+F_DT1MUL    EQU 12              ; 4 bytes
+F_DT2       EQU 16              ; 4 bytes
+F_TGT       EQU 21              ; 0..5 FM, 16..18 PSG, $FF muted
+
+; ---- translator globals
+MAP         EQU $1900           ; 8
+PENDON      EQU $1908           ; 6 pending key-on slot masks
+OFFMASK     EQU $190E
+SETTLED     EQU $190F
+LFRQ        EQU $1910
+PMD         EQU $1911
+AMD         EQU $1912
+PSGOFF      EQU $1913
+ACTIVE      EQU $1914
+IDLEDONE    EQU $1915
+LASTSEQ     EQU $1916
+REQTRACK    EQU $1917
+; ---- sequencer state (cleared on every track start)
+SEQSTART    EQU $1918
+STATUS      EQU $1918
+CURSOR      EQU $1919           ; word
+RETCUR      EQU $191B           ; word
+RETDEPTH    EQU $191D
+LASTLOOP    EQU $191E
+FRAC        EQU $1920           ; word
+BASE        EQU $1922
+MULT        EQU $1923
+MGAIN       EQU $1924
+CHGAIN      EQU $1928           ; 8
+LOOPCNT     EQU $1930           ; 8
+LOOPKEY     EQU $1938           ; 8 words
+SEQLEN      EQU $1948-SEQSTART
+; ---- blob header copy (pointers into $8000 window)
+HDR         EQU $1950
+H_EVENTS    EQU HDR+0
+H_DATA      EQU HDR+2
+H_PATCHES   EQU HDR+4
+H_TRACKS    EQU HDR+6
+H_FN        EQU HDR+8
+H_PSG       EQU HDR+10
+H_DT2MUL    EQU HDR+12
+H_DECAY     EQU HDR+14
+H_REL       EQU HDR+16
+H_LFO       EQU HDR+18
+H_FMS       EQU HDR+20
+H_AMS       EQU HDR+22
+H_TL38      EQU HDR+24
+H_MAPS      EQU HDR+26
+H_DT2P      EQU HDR+28
+H_EVCOUNT   EQU HDR+30
+TRACKCOUNT  EQU 38
+; ---- scratch
+EVB0        EQU $1980
+EVMASK      EQU $1981
+EVVAL       EQU $1982
+EVIDX       EQU $1983
+EVIDXW      EQU $1984           ; word
+EVDATA      EQU $1986           ; word
+BUDGET      EQU $1988           ; word
+OPKIND      EQU $198A
+PIDX        EQU $198C           ; word
+POCT        EQU $198E
+PBASE       EQU $1990           ; word
+PBOCT       EQU $1992
+FHI         EQU $1993
+FLO         EQU $1994
+FPORT       EQU $1995
+FVHI        EQU $1996
+FVLO        EQU $1997
+CHN         EQU $1998
+PATCHPTR    EQU $199A           ; word
+RKEY        EQU $199C           ; word
+RFIRST      EQU $199E           ; word
+RREPEAT     EQU $19A0           ; word
+RFOUND      EQU $19A2
+RCOND       EQU $19A3
+CURBANK     EQU $19A4           ; word: bank now mapped at $8000
+BLOBBANK    EQU $19A6           ; word: music blob bank
+VBASE       EQU $19A8           ; word: voice blob bank
+TICKACC     EQU $19AA           ; word
+TICKDUE     EQU $19AC
+SFXRD       EQU $19AD
+TRIG        EQU $19AE           ; scratch: sound byte
+; sample lanes: 16 bytes each; buffers are 256-byte pages
+LANE0       EQU $19C0
+LANE1       EQU $19D0
+L_CNT       EQU 0               ; bytes buffered (<= 255)
+L_RD        EQU 1               ; read index
+L_PAGE      EQU 2               ; buffer page (high byte)
+L_WR        EQU 3               ; write index
+L_ACTIVE    EQU 4
+L_REMAIN    EQU 5               ; word: bytes still in ROM
+L_BANK      EQU 7               ; word
+L_OFF       EQU 9               ; word: window address $8000..$FFFF
+BUF0        EQU $1A00
+BUF1        EQU $1B00
+MIXBUF      EQU $1C00           ; premixed DAC samples (unsigned)
+MIXCNT      EQU $19B4
+MIXRD       EQU $19B5
+MIXWR       EQU $19B6
+MIXN        EQU $19B7           ; scratch: samples in this mixer step
+MIXAHEAD    EQU 64              ; mix at most 11 ms ahead (trigger latency)
+OWED        EQU $19B0           ; word, signed 8.8: samples due minus played
+BTICKS      EQU $19B2           ; Timer B ticks toward the next music service
+BSTEP       EQU 410             ; 16/10 samples per Timer B tick, 8.8
+ACNT        EQU $19B3           ; Timer A samples since the last Timer B tick
+ENVMAX      EQU 12288
+
+; ===========================================================================
+            ORG     $0000
+            DI
+            JP      init
+
+            BLOCK   $0038-$
+            RETI                    ; interrupts stay disabled
+
+init
+            LD      SP, $1F00
+            IM      1
+            XOR     A
+            LD      (ACTIVE), A
+            LD      (LASTSEQ), A
+            LD      (STATOUT), A
+            LD      (PSGOFF), A
+            LD      HL, 0
+            LD      (ALIVE), HL
+wait_bank
+            LD      A, (BANKOK)
+            CP      $5A
+            JR      NZ, wait_bank
+            LD      A, (BANKLO)
+            LD      L, A
+            LD      A, (BANKHI)
+            AND     1
+            LD      H, A
+            LD      (BLOBBANK), HL
+            LD      A, (VBANKLO)
+            LD      E, A
+            LD      A, (VBANKHI)
+            AND     1
+            LD      D, A
+            LD      (VBASE), DE
+            LD      A, $FF          ; force the first bank write
+            LD      (CURBANK+1), A
+            CALL    setbank
+            XOR     A
+            LD      (TICKDUE), A
+            LD      (SFXRD), A
+            LD      HL, 0
+            LD      (TICKACC), HL
+            LD      (OWED), HL
+            LD      (BTICKS), A
+            LD      (ACNT), A
+            LD      (MIXWR), A
+            EXX                     ; spare set: B' mix count, C' samples,
+            LD      BC, 0           ; DE' mix read pointer
+            LD      DE, MIXBUF
+            EXX
+            LD      HL, LANE0       ; both lane records + idle
+            LD      B, 32
+in_lane
+            LD      (HL), A
+            INC     HL
+            DJNZ    in_lane
+            LD      A, BUF0>>8
+            LD      (LANE0+L_PAGE), A
+            LD      A, BUF1>>8
+            LD      (LANE1+L_PAGE), A
+            ; header -> RAM
+            LD      HL, $8000
+            LD      DE, HDR
+            LD      BC, 32
+            LDIR
+            ; translator to a known silent state (any map)
+            LD      HL, (H_MAPS)
+            LD      DE, MAP
+            LD      BC, 8
+            LDIR
+            CALL    reset
+            ; Timer A = 1014 (5326.7 Hz DAC clock)
+            LD      D, $24
+            LD      E, 253
+            CALL    ymw0
+            LD      D, $25
+            LD      E, 2
+            CALL    ymw0
+            LD      D, $26          ; Timer B = 255 (300.4 us)
+            LD      E, 255
+            CALL    ymw0
+            LD      D, $27
+            LD      E, $7F          ; ch3 special, load+enable A and B, clear flags
+            CALL    ymw0
+            JP      main_loop
+
+main_loop
+            LD      A, (CMDSEQ)
+            LD      HL, LASTSEQ
+            CP      (HL)
+            JR      Z, ml_nocmd
+            LD      (HL), A
+            CALL    command
+ml_nocmd
+            LD      A, (CMDPSG)
+            OR      A
+            JR      Z, ml_psg
+            LD      A, 15
+ml_psg
+            LD      (PSGOFF), A
+            CALL    dac_poll
+            CALL    sfx_ring
+            CALL    dac_poll
+            LD      HL, LANE0
+            CALL    refill
+            CALL    dac_poll
+            LD      HL, LANE1
+            CALL    refill
+            CALL    mixer
+            LD      A, (TICKDUE)    ; music services owed (counted by dac_poll)
+            OR      A
+            JP      Z, main_loop
+            DEC     A
+            LD      (TICKDUE), A
+            LD      A, (ACTIVE)
+            OR      A
+            JR      Z, ml_out
+            CALL    service
+            CALL    tick
+            LD      HL, (ALIVE)
+            INC     HL
+            LD      (ALIVE), HL
+ml_out
+            CALL    dac_poll
+            LD      A, (ACTIVE)
+            OR      A
+            JR      Z, ml_stat
+            LD      A, (STATUS)
+            OR      A
+            JR      Z, ml_stat
+            LD      A, 1
+ml_stat
+            LD      (STATOUT), A
+            JP      main_loop
+
+; ---- 68000 command ---------------------------------------------------------
+command
+            LD      A, (CMDTRACK)
+            OR      A
+            JR      NZ, cm_play
+            LD      A, (ACTIVE)
+            OR      A
+            RET     Z
+            XOR     A
+            LD      (ACTIVE), A
+            JP      silence
+cm_play
+            LD      (REQTRACK), A
+            CP      14
+            JR      C, cm_map
+            LD      A, 6
+cm_map
+            ADD     A, A
+            ADD     A, A
+            ADD     A, A
+            LD      E, A
+            LD      D, 0
+            LD      HL, (H_MAPS)
+            ADD     HL, DE
+            LD      DE, MAP
+            LD      BC, 8
+            LDIR
+            CALL    reset
+            LD      HL, SEQSTART
+            LD      DE, SEQSTART+1
+            LD      BC, SEQLEN-1
+            LD      (HL), 0
+            LDIR
+            LD      A, (REQTRACK)
+            LD      (STATUS), A
+            XOR     A
+            LD      (IDLEDONE), A
+            INC     A
+            LD      (ACTIVE), A
+            RET
+
+; ---- chip access -----------------------------------------------------------
+; D = register, E = value
+ymw0
+            CALL    dac_poll
+ymw0_w
+            LD      A, (YM_A0)
+            ADD     A, A
+            JR      C, ymw0_w
+            LD      A, D
+            LD      (YM_A0), A
+            LD      A, E
+            LD      (YM_D0), A
+            RET
+ymw1
+            CALL    dac_poll
+ymw1_w
+            LD      A, (YM_A0)
+            ADD     A, A
+            JR      C, ymw1_w
+            LD      A, D
+            LD      (YM_A1), A
+            LD      A, E
+            LD      (YM_D1), A
+            RET
+; C = FM channel 0..5, D = register base, E = value. Keeps BC.
+fmw
+            LD      A, C
+            CP      3
+            JR      NC, fmw_p1
+            ADD     A, D
+            LD      D, A
+            JR      ymw0
+fmw_p1
+            SUB     3
+            ADD     A, D
+            LD      D, A
+            JR      ymw1
+psgw
+            LD      (PSGPORT), A
+            RET
+; C = FM channel -> A = key-on channel code
+keycode
+            LD      A, C
+            CP      3
+            RET     C
+            INC     A
+            RET
+; A = n -> A = 1 << n
+bitmask
+            PUSH    BC
+            LD      B, A
+            LD      A, 1
+            INC     B
+            JR      bm_2
+bm_1
+            ADD     A, A
+bm_2
+            DJNZ    bm_1
+            POP     BC
+            RET
+; A = source -> IX = record
+srcix
+            RRCA
+            RRCA
+            RRCA
+            PUSH    HL
+            LD      L, A
+            LD      H, SRC>>8
+            PUSH    HL
+            POP     IX
+            POP     HL
+            RET
+; HL = IX + A
+ixfield
+            PUSH    IX
+            POP     HL
+            ADD     A, L
+            LD      L, A
+            RET
+; HL = A * E (8x8 unsigned)
+mul8
+            LD      H, A
+            LD      L, 0
+            LD      D, 0
+            LD      B, 8
+mul_l
+            ADD     HL, HL
+            JR      NC, mul_n
+            ADD     HL, DE
+mul_n
+            DJNZ    mul_l
+            RET
+settle
+            PUSH    BC
+            LD      B, 40
+st_l
+            DJNZ    st_l
+            POP     BC
+            RET
+
+; ---- samples ---------------------------------------------------------------
+; Wait for YM2612 ready.
+ybusy
+            LD      A, (YM_A0)
+            ADD     A, A
+            JR      C, ybusy
+            RET
+; Called between operations (never inside a ROM access). PROTECT parks the
+; driver here, still mixing from RAM, until the 68000's DMA is done.
+; On each Timer A overflow: rearm, mix both lanes to the DAC, advance the
+; music accumulator. Keeps every register. Never touches ROM.
+; One Timer A event (plus any Timer B tick seen with it), in the spare set.
+
+dac_poll
+            LD      A, (YM_A0)      ; fast path: Timer A only
+            RRCA
+            RET     NC
+            EX      AF, AF'         ; spare register set: the rest of the
+            EXX                     ; driver never uses it
+            LD      A, (YM_A0)
+            AND     3
+            CP      1
+            CALL    NZ, dp_both     ; Timer B seen too (one in ~1.8)
+            LD      A, $27          ; ch3 special, both timers run; clear A flag
+            LD      (YM_A0), A
+            LD      A, $5F
+            LD      (YM_D0), A
+            INC     C               ; C' = samples since the last Timer B tick
+            LD      A, B            ; B' = premixed samples buffered
+            OR      A
+            LD      A, $80          ; underrun: silence
+            JR      Z, ds_out_p
+            DEC     B
+            LD      A, (DE)         ; DE' = MIXBUF read pointer
+            INC     E
+ds_out_p
+            LD      L, A            ; >100 cycles since the $27 data write
+            LD      A, $2A
+            LD      (YM_A0), A
+            LD      A, L
+            LD      (YM_D0), A
+            LD      A, (PROTECT)
+            OR      A
+            JR      NZ, dp_park
+dp_ret
+            EXX
+            EX      AF, AF'
+            RET
+dp_park
+            LD      A, 1            ; parked: no ROM access until PROTECT clears
+            LD      (PROTACK), A
+dp_pw
+            LD      A, (YM_A0)
+            RRCA
+            CALL    C, dp_sample
+            LD      A, (PROTECT)
+            OR      A
+            JR      NZ, dp_pw
+            LD      (PROTACK), A
+            JR      dp_ret
+dp_sample
+            LD      A, (YM_A0)
+            AND     3
+            CP      1
+            CALL    NZ, dp_both     ; Timer B seen too (one in ~1.8)
+            LD      A, $27          ; ch3 special, both timers run; clear A flag
+            LD      (YM_A0), A
+            LD      A, $5F
+            LD      (YM_D0), A
+            INC     C               ; C' = samples since the last Timer B tick
+            LD      A, B            ; B' = premixed samples buffered
+            OR      A
+            LD      A, $80          ; underrun: silence
+            JR      Z, ds_out_s
+            DEC     B
+            LD      A, (DE)         ; DE' = MIXBUF read pointer
+            INC     E
+ds_out_s
+            LD      L, A            ; >100 cycles since the $27 data write
+            LD      A, $2A
+            LD      (YM_A0), A
+            LD      A, L
+            LD      (YM_D0), A
+            RET
+; Timer B overflow seen with Timer A: clear B, then account for it.
+dp_both
+            LD      A, $27
+            LD      (YM_A0), A
+            LD      A, $6F          ; clear B flag (A is cleared by the caller)
+            LD      (YM_D0), A
+; Timer B tick (spare set): music clock, and reconcile samples played (C')
+; against time (16/10 per tick). Two or more behind: drop one premixed sample.
+dp_btick
+            LD      HL, BTICKS
+            INC     (HL)
+            LD      A, (HL)
+            CP      55
+            JR      C, bt_time
+            LD      (HL), 0
+            LD      HL, TICKDUE     ; music services owed
+            INC     (HL)
+bt_time
+            PUSH    DE
+            LD      HL, (OWED)
+            LD      DE, BSTEP
+            ADD     HL, DE
+            POP     DE
+            LD      A, H
+            SUB     C
+            LD      H, A
+            LD      C, 0
+            JP      M, bt_neg
+            CP      2
+            JR      C, bt_store
+            DEC     H               ; two or more behind: drop one
+            LD      (OWED), HL
+            LD      A, B
+            OR      A
+            RET     Z
+            DEC     B
+            INC     E
+            RET
+bt_neg
+            CP      $FC             ; far ahead (rounding drift): resync
+            JR      NC, bt_store
+            LD      HL, 0
+bt_store
+            LD      (OWED), HL
+            RET
+; HL = bank number -> mapped at $8000 (9 bits, LSB first)
+setbank
+            LD      DE, (CURBANK)
+            LD      A, L
+            CP      E
+            JR      NZ, sb_go
+            LD      A, H
+            CP      D
+            RET     Z
+sb_go
+            LD      (CURBANK), HL
+            LD      DE, BANKREG
+            LD      A, L
+            LD      (DE), A
+            RRCA
+            LD      (DE), A
+            RRCA
+            LD      (DE), A
+            RRCA
+            LD      (DE), A
+            RRCA
+            LD      (DE), A
+            RRCA
+            LD      (DE), A
+            RRCA
+            LD      (DE), A
+            RRCA
+            LD      (DE), A
+            LD      A, H
+            LD      (DE), A
+            RET
+
+; Drain the 68000 sound-byte ring.
+sfx_ring
+            LD      A, (SFXRD)
+            LD      HL, SFXWR
+            CP      (HL)
+            RET     Z
+            LD      E, A
+            INC     A
+            AND     15
+            LD      (SFXRD), A
+            LD      A, E
+            AND     15
+            ADD     A, SFXRING&255
+            LD      L, A
+            LD      H, SFXRING>>8
+            LD      A, (HL)
+            OR      A
+            CALL    NZ, trigger
+            CALL    dac_poll
+            JR      sfx_ring
+
+; A = sound byte: restart its lane with the clip (bank-0/2 table lookup).
+trigger
+            LD      (TRIG), A
+            AND     $40
+            RRCA                    ; bank 2 -> 32
+            LD      B, A
+            LD      A, (TRIG)
+            AND     $1F
+            OR      B               ; table index 0..63
+            LD      L, A
+            LD      H, 0
+            LD      E, L
+            LD      D, H
+            ADD     HL, HL
+            ADD     HL, HL
+            ADD     HL, DE          ; *5
+            LD      DE, $8000
+            ADD     HL, DE
+            PUSH    HL
+            CALL    dac_poll
+            LD      HL, (VBASE)
+            CALL    setbank
+            POP     HL
+            LD      C, (HL)         ; offset bits 0-7
+            INC     HL
+            LD      B, (HL)         ; 8-15
+            INC     HL
+            LD      A, (HL)         ; 16-23
+            INC     HL
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)         ; length
+            PUSH    AF
+            PUSH    DE
+            LD      HL, (BLOBBANK)
+            CALL    setbank
+            CALL    dac_poll
+            POP     DE
+            LD      A, D
+            OR      E
+            JR      NZ, tr_ok
+            POP     AF
+            RET
+tr_ok
+            POP     AF
+            ; bank = VBASE + (offset >> 15); window = $8000 | (offset & $7FFF)
+            LD      H, A
+            LD      L, B
+            ADD     HL, HL          ; bit 15 of B into H:L >> 7 trick
+            LD      L, H            ; L = offset >> 15 (low 8 bits)
+            LD      H, 0
+            PUSH    DE
+            LD      DE, (VBASE)
+            ADD     HL, DE
+            POP     DE
+            PUSH    HL              ; bank
+            LD      A, B
+            OR      $80
+            LD      B, A            ; window address in BC
+            LD      HL, LANE0
+            LD      A, (TRIG)
+            AND     $20
+            JR      Z, tr_lane
+            LD      HL, LANE1
+tr_lane
+            XOR     A
+            LD      (HL), A         ; L_CNT
+            INC     HL
+            LD      (HL), A         ; L_RD
+            INC     HL
+            INC     HL
+            LD      (HL), A         ; L_WR
+            INC     HL
+            LD      (HL), 1         ; L_ACTIVE
+            INC     HL
+            LD      (HL), E         ; L_REMAIN
+            INC     HL
+            LD      (HL), D
+            INC     HL
+            POP     DE
+            LD      (HL), E         ; L_BANK
+            INC     HL
+            LD      (HL), D
+            INC     HL
+            LD      (HL), C         ; L_OFF
+            INC     HL
+            LD      (HL), B
+            RET
+
+; HL = lane: top the RAM buffer up from ROM. The lane's ROM pointer (HL),
+; buffer write pointer (DE) and remaining length (BC) stay in registers; the
+; DAC poll between chunks only uses the spare register set and A. Unrolled
+; 16-byte chunks; single bytes only at clip ends and bank-window edges.
+; The music bank is restored before returning.
+refill
+            PUSH    HL
+            POP     IY
+            LD      A, (IY+L_ACTIVE)
+            OR      A
+            RET     Z
+            LD      C, (IY+L_REMAIN)
+            LD      B, (IY+L_REMAIN+1)
+            LD      A, B
+            OR      C
+            JR      NZ, rf_need
+            LD      A, (IY+L_CNT)   ; ROM done: idle once drained
+            OR      A
+            RET     NZ
+            LD      (IY+L_ACTIVE), A
+            RET
+rf_need
+            LD      A, (IY+L_CNT)
+            CP      176
+            RET     NC
+            PUSH    BC
+            LD      L, (IY+L_BANK)
+            LD      H, (IY+L_BANK+1)
+            CALL    setbank
+            POP     BC
+            LD      L, (IY+L_OFF)
+            LD      H, (IY+L_OFF+1)
+            LD      E, (IY+L_WR)
+            LD      D, (IY+L_PAGE)
+rf_loop
+            CALL    dac_poll
+            LD      A, (IY+L_CNT)
+            CP      176
+            JP      NC, rf_store
+            LD      A, B            ; 16 or more left in the clip?
+            OR      A
+            JR      NZ, rf_w16
+            LD      A, C
+            CP      16
+            JR      C, rf_one
+rf_w16
+            LD      A, H            ; at least 16 left in the window?
+            CP      $FF
+            JR      NZ, rf_fast
+            LD      A, L
+            CP      $F1
+            JR      NC, rf_one
+rf_fast
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            CALL    dac_poll
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            CALL    dac_poll
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            CALL    dac_poll
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            LD      A, C
+            SUB     16
+            LD      C, A
+            JR      NC, rf_b16
+            DEC     B
+rf_b16
+            LD      A, (IY+L_CNT)
+            ADD     A, 16
+            LD      (IY+L_CNT), A
+            JR      rf_edge
+rf_one
+            LD      A, B
+            OR      C
+            JR      Z, rf_store     ; clip fully buffered
+            LD      A, (HL)
+            LD      (DE), A
+            INC     HL
+            INC     E
+            DEC     BC
+            INC     (IY+L_CNT)
+rf_edge
+            CALL    dac_poll
+            LD      A, H            ; crossed $FFFF: next 32 KB bank
+            OR      L
+            JP      NZ, rf_loop
+            PUSH    BC
+            PUSH    DE
+            LD      L, (IY+L_BANK)
+            LD      H, (IY+L_BANK+1)
+            INC     HL
+            LD      (IY+L_BANK), L
+            LD      (IY+L_BANK+1), H
+            CALL    setbank
+            POP     DE
+            POP     BC
+            LD      HL, $8000
+            JP      rf_loop
+rf_store
+            LD      (IY+L_OFF), L
+            LD      (IY+L_OFF+1), H
+            LD      (IY+L_WR), E
+            LD      (IY+L_REMAIN), C
+            LD      (IY+L_REMAIN+1), B
+            LD      HL, (BLOBBANK)
+            JP      setbank
+
+; Premix both lanes into MIXBUF, 16 samples at a time, while it holds
+; fewer than MIXAHEAD. An active lane with nothing buffered yet makes the
+; mixer wait (its refill follows); finished lanes are retired by refill.
+mixer
+            CALL    dac_poll
+            EXX
+            LD      A, B            ; B' = buffered premixed samples
+            EXX
+            CP      MIXAHEAD
+            RET     NC
+            LD      B, 16
+            LD      C, 0            ; C bit0 lane0, bit1 lane1
+            LD      A, (LANE0+L_ACTIVE)
+            OR      A
+            JR      Z, mx_n0
+            LD      A, (LANE0+L_CNT)
+            OR      A
+            RET     Z               ; wait for lane 0 data
+            SET     0, C
+            CP      B
+            JR      NC, mx_n0
+            LD      B, A
+mx_n0
+            LD      A, (LANE1+L_ACTIVE)
+            OR      A
+            JR      Z, mx_n1
+            LD      A, (LANE1+L_CNT)
+            OR      A
+            RET     Z               ; wait for lane 1 data
+            SET     1, C
+            CP      B
+            JR      NC, mx_n1
+            LD      B, A
+mx_n1
+            LD      A, C
+            OR      A
+            RET     Z               ; nothing playing
+            LD      (MIXN), A       ; lanes mask (reused below)
+            LD      A, B
+            LD      (MIXN+1), A     ; count
+            LD      A, (LANE0+L_RD)
+            LD      L, A
+            LD      H, BUF0>>8
+            LD      A, (LANE1+L_RD)
+            LD      E, A
+            LD      D, BUF1>>8
+            LD      A, (MIXWR)
+            LD      C, A
+            CALL    dac_poll
+            LD      A, B
+            LD      B, MIXBUF>>8
+            CP      16
+            JP      NZ, mx_slow
+            LD      A, (MIXN)
+            CP      3
+            JP      Z, mx_both
+            CP      1
+            JP      Z, mx_l0
+mx_l1
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            CALL    dac_poll
+            CALL    dac_poll
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            JP      mx_done
+mx_l0
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            JP      mx_done
+mx_both
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h0
+            SUB     $80
+            JR      NC, mx_s0
+            XOR     A
+            JR      mx_s0
+mx_h0
+            ADD     A, $80
+            JR      NC, mx_s0
+            LD      A, $FF
+mx_s0
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h1
+            SUB     $80
+            JR      NC, mx_s1
+            XOR     A
+            JR      mx_s1
+mx_h1
+            ADD     A, $80
+            JR      NC, mx_s1
+            LD      A, $FF
+mx_s1
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h2
+            SUB     $80
+            JR      NC, mx_s2
+            XOR     A
+            JR      mx_s2
+mx_h2
+            ADD     A, $80
+            JR      NC, mx_s2
+            LD      A, $FF
+mx_s2
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h3
+            SUB     $80
+            JR      NC, mx_s3
+            XOR     A
+            JR      mx_s3
+mx_h3
+            ADD     A, $80
+            JR      NC, mx_s3
+            LD      A, $FF
+mx_s3
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            CALL    dac_poll
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h4
+            SUB     $80
+            JR      NC, mx_s4
+            XOR     A
+            JR      mx_s4
+mx_h4
+            ADD     A, $80
+            JR      NC, mx_s4
+            LD      A, $FF
+mx_s4
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h5
+            SUB     $80
+            JR      NC, mx_s5
+            XOR     A
+            JR      mx_s5
+mx_h5
+            ADD     A, $80
+            JR      NC, mx_s5
+            LD      A, $FF
+mx_s5
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h6
+            SUB     $80
+            JR      NC, mx_s6
+            XOR     A
+            JR      mx_s6
+mx_h6
+            ADD     A, $80
+            JR      NC, mx_s6
+            LD      A, $FF
+mx_s6
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h7
+            SUB     $80
+            JR      NC, mx_s7
+            XOR     A
+            JR      mx_s7
+mx_h7
+            ADD     A, $80
+            JR      NC, mx_s7
+            LD      A, $FF
+mx_s7
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            CALL    dac_poll
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h8
+            SUB     $80
+            JR      NC, mx_s8
+            XOR     A
+            JR      mx_s8
+mx_h8
+            ADD     A, $80
+            JR      NC, mx_s8
+            LD      A, $FF
+mx_s8
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h9
+            SUB     $80
+            JR      NC, mx_s9
+            XOR     A
+            JR      mx_s9
+mx_h9
+            ADD     A, $80
+            JR      NC, mx_s9
+            LD      A, $FF
+mx_s9
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h10
+            SUB     $80
+            JR      NC, mx_s10
+            XOR     A
+            JR      mx_s10
+mx_h10
+            ADD     A, $80
+            JR      NC, mx_s10
+            LD      A, $FF
+mx_s10
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h11
+            SUB     $80
+            JR      NC, mx_s11
+            XOR     A
+            JR      mx_s11
+mx_h11
+            ADD     A, $80
+            JR      NC, mx_s11
+            LD      A, $FF
+mx_s11
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            CALL    dac_poll
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h12
+            SUB     $80
+            JR      NC, mx_s12
+            XOR     A
+            JR      mx_s12
+mx_h12
+            ADD     A, $80
+            JR      NC, mx_s12
+            LD      A, $FF
+mx_s12
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h13
+            SUB     $80
+            JR      NC, mx_s13
+            XOR     A
+            JR      mx_s13
+mx_h13
+            ADD     A, $80
+            JR      NC, mx_s13
+            LD      A, $FF
+mx_s13
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h14
+            SUB     $80
+            JR      NC, mx_s14
+            XOR     A
+            JR      mx_s14
+mx_h14
+            ADD     A, $80
+            JR      NC, mx_s14
+            LD      A, $FF
+mx_s14
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (DE)
+            ADD     A, (HL)         ; u0+u1 = s0+s1+256
+            JR      C, mx_h15
+            SUB     $80
+            JR      NC, mx_s15
+            XOR     A
+            JR      mx_s15
+mx_h15
+            ADD     A, $80
+            JR      NC, mx_s15
+            LD      A, $FF
+mx_s15
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            JP      mx_done
+mx_slow                             ; fewer than 16 (clip ends)
+            LD      A, (MIXN)
+            CP      3
+            JR      Z, mxs_both
+            CP      1
+            JR      Z, mxs_l0
+mxs_l1
+            LD      A, (DE)
+            LD      (BC), A
+            INC     E
+            INC     C
+            LD      A, (MIXN+1)
+            DEC     A
+            LD      (MIXN+1), A
+            JR      NZ, mxs_l1
+            JR      mx_done
+mxs_l0
+            LD      A, (HL)
+            LD      (BC), A
+            INC     L
+            INC     C
+            LD      A, (MIXN+1)
+            DEC     A
+            LD      (MIXN+1), A
+            JR      NZ, mxs_l0
+            JR      mx_done
+mxs_both
+            LD      A, (DE)
+            ADD     A, (HL)
+            JR      C, mxs_h
+            SUB     $80
+            JR      NC, mxs_s
+            XOR     A
+            JR      mxs_s
+mxs_h
+            ADD     A, $80
+            JR      NC, mxs_s
+            LD      A, $FF
+mxs_s
+            LD      (BC), A
+            INC     L
+            INC     E
+            INC     C
+            LD      A, (MIXN+1)
+            DEC     A
+            LD      (MIXN+1), A
+            JR      NZ, mxs_both
+mx_done
+            CALL    dac_poll
+            ; recount from the pointers moved: n = new MIXWR - old MIXWR
+            LD      A, (MIXWR)
+            LD      B, A
+            LD      A, C
+            LD      (MIXWR), A
+            SUB     B               ; n
+            LD      B, A
+            LD      A, (MIXN)
+            BIT     0, A
+            JR      Z, mxd_1
+            LD      A, L
+            LD      (LANE0+L_RD), A
+            LD      A, (LANE0+L_CNT)
+            SUB     B
+            LD      (LANE0+L_CNT), A
+mxd_1
+            LD      A, (MIXN)
+            BIT     1, A
+            JR      Z, mxd_2
+            LD      A, E
+            LD      (LANE1+L_RD), A
+            LD      A, (LANE1+L_CNT)
+            SUB     B
+            LD      (LANE1+L_CNT), A
+mxd_2
+            LD      A, B
+            EXX
+            ADD     A, B
+            LD      B, A
+            EXX
+            JP      mixer
+
+; ---- translator: reset / silence / tick ------------------------------------
+reset
+            LD      B, 0
+rs_src
+            LD      A, B
+            CALL    srcix
+            PUSH    IX
+            POP     HL
+            LD      E, 32
+rs_clr
+            LD      (HL), 0
+            INC     HL
+            DEC     E
+            JR      NZ, rs_clr
+            LD      (IX+F_TL), $7F
+            LD      (IX+F_PSGATT), $FF
+            LD      HL, MAP
+            LD      A, L
+            ADD     A, B
+            LD      L, A
+            LD      A, (HL)
+            LD      (IX+F_TGT), A
+            INC     B
+            LD      A, B
+            CP      8
+            JR      NZ, rs_src
+            XOR     A
+            LD      (LFRQ), A
+            LD      (PMD), A
+            LD      (AMD), A
+            LD      (OFFMASK), A
+            LD      HL, PENDON
+            LD      B, 6
+rs_pend
+            LD      (HL), A
+            INC     HL
+            DJNZ    rs_pend
+            LD      DE, $2200
+            CALL    ymw0
+            LD      DE, $274F       ; ch3 special, both timers running
+            CALL    ymw0
+            LD      DE, $2B80       ; DAC on (channel 6 is the sample mixer)
+            CALL    ymw0
+            LD      DE, $B6C0       ; channel 6 output left+right
+            CALL    ymw1
+            LD      C, 0
+rs_ch
+            CALL    keycode
+            LD      E, A
+            LD      D, $28
+            CALL    ymw0
+            LD      B, 0
+rs_op
+            LD      A, $40
+            ADD     A, B
+            LD      D, A
+            LD      E, $7F
+            CALL    fmw
+            LD      A, $80
+            ADD     A, B
+            LD      D, A
+            LD      E, $FF
+            CALL    fmw
+            LD      A, $90
+            ADD     A, B
+            LD      D, A
+            LD      E, 0
+            CALL    fmw
+            LD      A, B
+            ADD     A, 4
+            LD      B, A
+            CP      16
+            JR      NZ, rs_op
+            LD      DE, $B400
+            CALL    fmw
+            INC     C
+            LD      A, C
+            CP      5               ; channel 6 stays the DAC
+            JR      NZ, rs_ch
+            LD      A, $9F
+            CALL    psgw
+            LD      A, $BF
+            CALL    psgw
+            LD      A, $DF
+            CALL    psgw
+            LD      A, $FF
+            JP      psgw
+
+silence
+            XOR     A
+            LD      (OFFMASK), A
+            LD      HL, PENDON
+            LD      B, 6
+si_pend
+            LD      (HL), A
+            INC     HL
+            DJNZ    si_pend
+            LD      B, 0
+si_src
+            PUSH    BC
+            LD      A, B
+            CALL    srcix
+            LD      A, (IX+F_TGT)
+            CP      6
+            JR      NC, si_psg
+            LD      C, A
+            CALL    keycode
+            LD      E, A
+            LD      D, $28
+            CALL    ymw0
+            LD      B, 0
+si_op
+            LD      A, $80
+            ADD     A, B
+            LD      D, A
+            LD      E, $FF
+            CALL    fmw
+            LD      A, $40
+            ADD     A, B
+            LD      D, A
+            LD      E, $7F
+            CALL    fmw
+            LD      A, B
+            ADD     A, 4
+            LD      B, A
+            CP      16
+            JR      NZ, si_op
+            JR      si_next
+si_psg
+            CP      $FF
+            JR      Z, si_next
+            LD      (IX+F_STAGE), 0
+            CALL    psglevel
+si_next
+            POP     BC
+            INC     B
+            LD      A, B
+            CP      8
+            JR      NZ, si_src
+            RET
+
+; Issues queued key-ons (after a settle if the channel was keyed off this
+; service), then advances PSG envelopes. Once per source service.
+tick
+            XOR     A
+            LD      (SETTLED), A
+            LD      C, 0
+tk_ch
+            LD      HL, PENDON
+            LD      A, L
+            ADD     A, C
+            LD      L, A
+            LD      A, (HL)
+            OR      A
+            JR      Z, tk_next
+            LD      B, A
+            LD      (HL), 0
+            LD      A, (SETTLED)
+            OR      A
+            JR      NZ, tk_go
+            LD      A, C
+            CALL    bitmask
+            LD      HL, OFFMASK
+            AND     (HL)
+            JR      Z, tk_go
+            CALL    settle
+            LD      A, 1
+            LD      (SETTLED), A
+tk_go
+            LD      A, B
+            RLCA
+            RLCA
+            RLCA
+            RLCA
+            AND     $F0
+            LD      B, A
+            CALL    keycode
+            OR      B
+            LD      E, A
+            LD      D, $28
+            CALL    ymw0
+tk_next
+            INC     C
+            LD      A, C
+            CP      6
+            JR      NZ, tk_ch
+            XOR     A
+            LD      (OFFMASK), A
+            LD      B, 0
+te_src
+            CALL    dac_poll
+            LD      A, B
+            CALL    srcix
+            LD      A, (IX+F_TGT)
+            CP      16
+            JP      C, te_next
+            CP      $FF
+            JP      Z, te_next
+            LD      A, (IX+F_STAGE)
+            OR      A
+            JP      Z, te_next
+            PUSH    BC
+            CP      1
+            JR      NZ, te_s2
+            LD      A, (IX+F_D1R)
+            JR      te_dec
+te_s2
+            CP      2
+            JR      NZ, te_s3
+            LD      A, (IX+F_D2R)
+te_dec
+            ADD     A, A
+            LD      E, A
+            LD      D, 0
+            LD      HL, (H_DECAY)
+            JR      te_get
+te_s3
+            LD      A, (IX+F_D1LRR)
+            AND     15
+            ADD     A, A
+            LD      E, A
+            LD      D, 0
+            LD      HL, (H_REL)
+te_get
+            ADD     HL, DE
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)
+            LD      L, (IX+F_ENV)
+            LD      H, (IX+F_ENV+1)
+            ADD     HL, DE
+            LD      A, (IX+F_STAGE)
+            CP      1
+            JR      NZ, te_max
+            LD      A, (IX+F_D1LRR)
+            RRCA
+            RRCA
+            RRCA
+            RRCA
+            AND     15
+            CP      15
+            JR      Z, te_susmax
+            PUSH    HL
+            LD      D, A            ; sustain = level*384
+            LD      H, A
+            LD      L, 0
+            SRL     H
+            RR      L
+            LD      A, D
+            ADD     A, H
+            LD      H, A
+            EX      DE, HL
+            POP     HL
+            JR      te_cmp
+te_susmax
+            LD      DE, ENVMAX
+te_cmp
+            OR      A
+            SBC     HL, DE
+            ADD     HL, DE
+            JR      C, te_max
+            LD      H, D
+            LD      L, E
+            LD      (IX+F_STAGE), 2
+te_max
+            LD      DE, ENVMAX
+            OR      A
+            SBC     HL, DE
+            ADD     HL, DE
+            JR      C, te_store
+            LD      H, D
+            LD      L, E
+            LD      A, (IX+F_STAGE)
+            CP      3
+            JR      NZ, te_store
+            LD      (IX+F_STAGE), 0
+te_store
+            CALL    dac_poll
+            LD      (IX+F_ENV), L
+            LD      (IX+F_ENV+1), H
+            CALL    psglevel
+            POP     BC
+te_next
+            INC     B
+            LD      A, B
+            CP      8
+            JP      NZ, te_src
+            RET
+
+; ---- translator: helpers on IX source --------------------------------------
+psglevel
+            CALL    dac_poll
+            LD      E, 15
+            LD      A, (IX+F_STAGE)
+            OR      A
+            JR      Z, pl_set
+            LD      A, (IX+F_RL)
+            AND     $C0
+            JR      Z, pl_set
+            LD      A, (IX+F_TL)
+            LD      L, A
+            LD      H, 0
+            LD      DE, (H_TL38)
+            ADD     HL, DE
+            LD      A, (HL)
+            ADD     A, (IX+F_ENV+1)
+            LD      E, A
+            LD      A, (PSGOFF)
+            ADD     A, E
+            CP      16
+            JR      C, pl_ok
+            LD      A, 15
+pl_ok
+            LD      E, A
+pl_set
+            LD      A, (IX+F_PSGATT)
+            CP      E
+            RET     Z
+            LD      (IX+F_PSGATT), E
+            LD      A, (IX+F_TGT)
+            SUB     16
+            RRCA
+            RRCA
+            RRCA
+            OR      $90
+            OR      E
+            JP      psgw
+
+; C = target. Keeps B.
+fmpan
+            CALL    dac_poll
+            PUSH    BC
+            LD      A, (IX+F_PMSAMS)
+            RRCA
+            RRCA
+            RRCA
+            RRCA
+            AND     7
+            LD      H, A
+            LD      L, 0
+            SRL     H
+            RR      L
+            LD      A, (PMD)
+            ADD     A, L
+            LD      L, A
+            LD      DE, (H_FMS)
+            ADD     HL, DE
+            LD      B, (HL)
+            LD      A, (IX+F_PMSAMS)
+            AND     3
+            LD      H, A
+            LD      L, 0
+            SRL     H
+            RR      L
+            LD      A, (AMD)
+            ADD     A, L
+            LD      L, A
+            LD      DE, (H_AMS)
+            ADD     HL, DE
+            LD      A, (HL)
+            OR      B
+            LD      B, A
+            LD      A, (IX+F_RL)
+            AND     $40
+            ADD     A, A
+            LD      E, A
+            LD      A, (IX+F_RL)
+            AND     $80
+            RRCA
+            OR      E
+            OR      B
+            LD      E, A
+            LD      D, $B4
+            CALL    fmw
+            POP     BC
+            RET
+
+lfo
+            LD      A, (PMD)
+            LD      E, A
+            LD      A, (AMD)
+            OR      E
+            JR      Z, lf_off
+            LD      A, (LFRQ)
+            LD      E, A
+            LD      D, 0
+            LD      HL, (H_LFO)
+            ADD     HL, DE
+            LD      E, (HL)
+            JR      lf_w
+lf_off
+            LD      E, 0
+lf_w
+            LD      D, $22
+            JP      ymw0
+
+; Pitch of IX source on target C.
+pitch
+            CALL    dac_poll
+            LD      A, (IX+F_KC)
+            AND     15
+            LD      B, A
+            SRL     A
+            SRL     A
+            LD      D, A
+            LD      A, B
+            SUB     D               ; semitone 0..12
+            LD      H, 0
+            LD      L, A
+            ADD     HL, HL
+            ADD     HL, HL
+            ADD     HL, HL
+            ADD     HL, HL
+            ADD     HL, HL
+            ADD     HL, HL
+            LD      A, (IX+F_KF)
+            RRCA
+            RRCA
+            AND     $3F
+            ADD     A, L
+            LD      L, A
+            LD      A, (IX+F_KC)
+            RRCA
+            RRCA
+            RRCA
+            RRCA
+            AND     7
+            LD      B, A
+            LD      A, H
+            CP      3
+            JR      C, pt_norm
+            SUB     3
+            LD      H, A
+            INC     B
+pt_norm
+            LD      (PIDX), HL
+            LD      A, B
+            LD      (POCT), A
+            LD      A, C
+            CP      2
+            JR      Z, pt_special
+            CP      6
+            JR      NC, pt_psg
+            LD      E, A
+            XOR     A
+            LD      (FPORT), A
+            LD      A, E
+            CP      3
+            JR      C, pt_regs
+            SUB     3
+            LD      E, A
+            LD      A, 1
+            LD      (FPORT), A
+pt_regs
+            LD      A, $A4
+            ADD     A, E
+            LD      (FHI), A
+            LD      A, $A0
+            ADD     A, E
+            LD      (FLO), A
+            JP      fmfreq
+pt_special
+            LD      HL, (PIDX)
+            LD      (PBASE), HL
+            LD      A, (POCT)
+            LD      (PBOCT), A
+            LD      B, 0
+ps_op
+            PUSH    BC
+            LD      A, F_DT2
+            ADD     A, B
+            CALL    ixfield
+            LD      A, (HL)
+            ADD     A, A
+            LD      E, A
+            LD      D, 0
+            LD      HL, (H_DT2P)
+            ADD     HL, DE
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)
+            LD      HL, (PBASE)
+            ADD     HL, DE
+            LD      A, (PBOCT)
+            LD      C, A
+            LD      A, H
+            CP      3
+            JR      C, ps_norm
+            SUB     3
+            LD      H, A
+            INC     C
+ps_norm
+            LD      (PIDX), HL
+            LD      A, C
+            LD      (POCT), A
+            LD      HL, speclow
+            LD      E, B
+            LD      D, 0
+            ADD     HL, DE
+            LD      A, (HL)
+            LD      (FLO), A
+            ADD     A, 4
+            LD      (FHI), A
+            XOR     A
+            LD      (FPORT), A
+            CALL    fmfreq
+            POP     BC
+            INC     B
+            LD      A, B
+            CP      4
+            JR      NZ, ps_op
+            RET
+speclow
+            DB      $A9, $A8, $AA, $A2
+pt_psg
+            LD      HL, (PIDX)
+            ADD     HL, HL
+            LD      DE, (H_PSG)
+            ADD     HL, DE
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)         ; period at octave 0
+            LD      A, (POCT)
+            OR      A
+            JR      Z, pp_clamp
+            LD      B, A
+            LD      HL, 1           ; round: + (1 << oct) >> 1
+            DEC     A
+            JR      Z, pp_round
+pp_rl
+            ADD     HL, HL
+            DEC     A
+            JR      NZ, pp_rl
+pp_round
+            ADD     HL, DE
+            EX      DE, HL
+pp_sh
+            SRL     D
+            RR      E
+            DJNZ    pp_sh
+pp_clamp
+            LD      A, D
+            CP      4
+            JR      C, pp_ok
+            SRL     D
+            RR      E
+            JR      pp_clamp
+pp_ok
+            LD      A, C
+            SUB     16
+            RRCA
+            RRCA
+            RRCA
+            LD      B, A
+            LD      A, E
+            AND     15
+            OR      B
+            OR      $80
+            CALL    psgw
+            LD      A, E
+            RRCA
+            RRCA
+            RRCA
+            RRCA
+            AND     $0F
+            LD      E, A
+            LD      A, D
+            RLCA
+            RLCA
+            RLCA
+            RLCA
+            AND     $30
+            OR      E
+            JP      psgw
+
+; Block/F-number from PIDX/POCT to FHI/FLO on FPORT.
+fmfreq
+            CALL    dac_poll
+            LD      HL, (PIDX)
+            ADD     HL, HL
+            LD      DE, (H_FN)
+            ADD     HL, DE
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)
+            LD      A, (POCT)
+            CP      8
+            JR      C, ff_ok
+            SUB     7
+            LD      B, A
+ff_sh
+            SLA     E
+            RL      D
+            DJNZ    ff_sh
+            LD      A, D
+            CP      8
+            JR      C, ff_7
+            LD      DE, $07FF
+ff_7
+            LD      A, 7
+ff_ok
+            ADD     A, A
+            ADD     A, A
+            ADD     A, A
+            OR      D
+            LD      (FVHI), A
+            LD      A, E
+            LD      (FVLO), A
+            LD      A, (FHI)
+            LD      D, A
+            LD      A, (FVHI)
+            LD      E, A
+            CALL    ymwp
+            LD      A, (FLO)
+            LD      D, A
+            LD      A, (FVLO)
+            LD      E, A
+ymwp
+            LD      A, (FPORT)
+            OR      A
+            JP      Z, ymw0
+            JP      ymw1
+
+; ---- translator entry: source YM2151 write D = register, E = value ---------
+opmw
+            CALL    dac_poll
+            LD      A, D
+            CP      $08
+            JR      NZ, ow_n08
+            LD      A, E
+            AND     7
+            CALL    srcix
+            LD      A, E
+            RRCA
+            RRCA
+            RRCA
+            AND     15
+            LD      B, A            ; slot mask
+            LD      A, (IX+F_TGT)
+            CP      6
+            JR      NC, ow_kpsg
+            LD      C, A
+            LD      HL, PENDON
+            ADD     A, L
+            LD      L, A
+            LD      (HL), B
+            LD      A, B
+            OR      A
+            RET     NZ
+            CALL    keycode         ; key-off now; key-on waits for tick
+            LD      E, A
+            LD      D, $28
+            CALL    ymw0
+            LD      A, C
+            CALL    bitmask
+            LD      HL, OFFMASK
+            OR      (HL)
+            LD      (HL), A
+            RET
+ow_kpsg
+            CP      $FF
+            RET     Z
+            LD      A, B
+            OR      A
+            JR      Z, ow_koff
+            LD      (IX+F_STAGE), 1
+            LD      (IX+F_ENV), 0
+            LD      (IX+F_ENV+1), 0
+            JP      psglevel
+ow_koff
+            LD      A, (IX+F_STAGE)
+            OR      A
+            JP      Z, psglevel
+            LD      (IX+F_STAGE), 3
+            JP      psglevel
+ow_n08
+            CP      $18
+            JR      NZ, ow_n18
+            LD      A, E
+            LD      (LFRQ), A
+            JP      lfo
+ow_n18
+            CP      $19
+            JR      NZ, ow_n19
+            LD      A, E
+            BIT     7, A
+            JR      Z, ow_amd
+            AND     $7F
+            LD      (PMD), A
+            JR      ow_19b
+ow_amd
+            LD      (AMD), A
+ow_19b
+            CALL    lfo
+            LD      B, 0
+ow_pan
+            LD      A, B
+            CALL    srcix
+            LD      A, (IX+F_TGT)
+            CP      6
+            JR      NC, ow_pan_n
+            LD      C, A
+            CALL    fmpan
+ow_pan_n
+            INC     B
+            LD      A, B
+            CP      8
+            JR      NZ, ow_pan
+            RET
+ow_n19
+            CP      $20
+            RET     C
+            AND     7
+            CALL    srcix
+            LD      A, (IX+F_TGT)
+            CP      $FF
+            RET     Z
+            LD      C, A            ; target
+            LD      A, D
+            CP      $40
+            JR      NC, ow_op
+            AND     $F8
+            CP      $20
+            JR      NZ, ow_n20
+            LD      (IX+F_RL), E
+            LD      A, C
+            CP      6
+            JP      NC, psglevel
+            LD      A, E
+            AND     $3F
+            LD      E, A
+            LD      D, $B0
+            CALL    fmw
+            JP      fmpan
+ow_n20
+            CP      $28
+            JR      NZ, ow_n28
+            LD      (IX+F_KC), E
+            JP      pitch
+ow_n28
+            CP      $30
+            JR      NZ, ow_n30
+            LD      (IX+F_KF), E
+            JP      pitch
+ow_n30
+            LD      (IX+F_PMSAMS), E
+            LD      A, C
+            CP      6
+            RET     NC
+            JP      fmpan
+; Operator registers: OPM M1,M2,C1,C2 (+0/+8/+16/+24) = YM2612 S1,S3,S2,S4
+; (+0/+4/+8/+12): the operator index carries over directly.
+ow_op
+            LD      A, D
+            RRCA
+            RRCA
+            RRCA
+            AND     3
+            LD      B, A            ; operator
+            LD      A, D
+            RLCA
+            RLCA
+            RLCA
+            AND     7
+            LD      (OPKIND), A     ; 2..7
+            LD      A, C
+            CP      6
+            JR      NC, ow_opsg
+            LD      A, (OPKIND)
+            CP      2
+            JR      NZ, ow_on2
+            LD      A, F_DT1MUL
+            ADD     A, B
+            CALL    ixfield
+            LD      (HL), E
+            JR      ow_mul
+ow_on2
+            CP      6
+            JR      NZ, ow_plain
+            LD      A, F_DT2
+            ADD     A, B
+            CALL    ixfield
+            LD      A, E
+            RLCA
+            RLCA
+            AND     3
+            LD      (HL), A
+            LD      A, E
+            AND     $1F
+            LD      E, A
+            LD      A, B
+            ADD     A, A
+            ADD     A, A
+            ADD     A, $70
+            LD      D, A
+            CALL    fmw             ; DT2 has no YM2612 register
+            LD      A, C
+            CP      2
+            JP      Z, pitch        ; special mode: exact per-operator pitch
+            JR      ow_mul
+ow_plain
+            INC     A
+            ADD     A, A
+            ADD     A, A
+            ADD     A, A
+            ADD     A, A
+            LD      D, A
+            LD      A, B
+            ADD     A, A
+            ADD     A, A
+            ADD     A, D
+            LD      D, A
+            JP      fmw
+ow_mul
+            LD      A, F_DT1MUL
+            ADD     A, B
+            CALL    ixfield
+            LD      E, (HL)
+            LD      A, B
+            ADD     A, A
+            ADD     A, A
+            ADD     A, $30
+            LD      D, A
+            LD      A, C
+            CP      2
+            JP      Z, fmw          ; special: raw DT1/MUL
+            PUSH    DE              ; fold DT2 ratio into MUL
+            LD      A, F_DT2
+            ADD     A, B
+            CALL    ixfield
+            LD      A, E
+            AND     15
+            ADD     A, A
+            ADD     A, A
+            ADD     A, (HL)
+            LD      E, A
+            LD      D, 0
+            LD      HL, (H_DT2MUL)
+            ADD     HL, DE
+            LD      H, (HL)
+            POP     DE
+            LD      A, E
+            AND     $70
+            OR      H
+            LD      E, A
+            JP      fmw
+ow_opsg
+            LD      A, B
+            CP      3               ; PSG voices follow the final carrier only
+            RET     NZ
+            LD      A, (OPKIND)
+            CP      3
+            JR      NZ, ow_p5
+            LD      A, E
+            AND     $7F
+            LD      (IX+F_TL), A
+            JP      psglevel
+ow_p5
+            CP      5
+            JR      NZ, ow_p6
+            LD      A, E
+            AND     $1F
+            LD      (IX+F_D1R), A
+            RET
+ow_p6
+            CP      6
+            JR      NZ, ow_p7
+            LD      A, E
+            AND     $1F
+            LD      (IX+F_D2R), A
+            RET
+ow_p7
+            CP      7
+            RET     NZ
+            LD      (IX+F_D1LRR), E
+            RET
+
+; ---- sequencer --------------------------------------------------------------
+; Source write with registers kept: D = register, E = value.
+w
+            PUSH    BC
+            PUSH    HL
+            PUSH    IX
+            CALL    opmw
+            POP     IX
+            POP     HL
+            POP     BC
+            RET
+
+; A = channel -> E = (255 - (master*gain >> 8)) >> 1
+attn
+            LD      HL, CHGAIN
+            ADD     A, L
+            LD      L, A
+            LD      E, (HL)
+            LD      A, (MGAIN)
+            PUSH    BC
+            CALL    mul8
+            POP     BC
+            LD      A, 255
+            SUB     H
+            SRL     A
+            LD      E, A
+            RET
+
+; A = selector -> HL = cursor, carry set if unavailable
+lookup
+            CP      TRACKCOUNT
+            CCF
+            RET     C
+            ADD     A, A
+            LD      E, A
+            LD      D, 0
+            LD      HL, (H_TRACKS)
+            ADD     HL, DE
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)
+            EX      DE, HL
+            LD      DE, (H_EVCOUNT)
+            OR      A
+            SBC     HL, DE
+            ADD     HL, DE
+            CCF
+            RET
+; HL = cursor
+install
+            LD      (CURSOR), HL
+            LD      A, $FF
+            LD      (STATUS), A
+            XOR     A
+            LD      (IDLEDONE), A
+            LD      HL, LOOPCNT
+            LD      B, 8
+in_l
+            LD      (HL), A
+            INC     HL
+            DJNZ    in_l
+            RET
+
+service
+            LD      A, (STATUS)
+            OR      A
+            JR      NZ, sv_busy
+            LD      A, (IDLEDONE)   ; idle: mute outputs and final carriers
+            OR      A
+            RET     NZ
+            INC     A
+            LD      (IDLEDONE), A
+            LD      B, 0
+sv_idle1
+            LD      A, $20
+            ADD     A, B
+            LD      D, A
+            LD      E, 0
+            CALL    w
+            INC     B
+            LD      A, B
+            CP      8
+            JR      NZ, sv_idle1
+            LD      B, 0
+sv_idle2
+            LD      A, $78
+            ADD     A, B
+            LD      D, A
+            LD      E, $7F
+            CALL    w
+            INC     B
+            LD      A, B
+            CP      8
+            JR      NZ, sv_idle2
+            RET
+sv_busy
+            CP      $FF
+            JR      NZ, sv_install
+            LD      A, (MULT)       ; tempo accumulator
+            LD      E, A
+            LD      A, (BASE)
+            CALL    mul8
+            LD      DE, (FRAC)
+            ADD     HL, DE
+            LD      (FRAC), HL
+            RET     NC
+            JR      sv_events
+sv_install
+            CALL    lookup
+            JP      C, sv_invalid
+            XOR     A
+            LD      (RETDEPTH), A
+            CALL    install
+sv_events
+            LD      HL, 1024
+            LD      (BUDGET), HL
+ev_loop
+            CALL    dac_poll
+            LD      HL, (BUDGET)
+            LD      A, H
+            OR      L
+            JP      Z, sv_invalid
+            DEC     HL
+            LD      (BUDGET), HL
+            LD      HL, (CURSOR)
+            LD      DE, (H_EVCOUNT)
+            OR      A
+            SBC     HL, DE
+            JP      NC, sv_invalid
+            ADD     HL, DE
+            PUSH    HL
+            INC     HL
+            LD      (CURSOR), HL
+            POP     HL
+            ADD     HL, HL
+            ADD     HL, HL
+            LD      DE, (H_EVENTS)
+            ADD     HL, DE
+            LD      A, (HL)
+            LD      (EVB0), A
+            INC     HL
+            LD      A, (HL)
+            LD      (EVMASK), A
+            INC     HL
+            LD      A, (HL)
+            LD      (EVVAL), A
+            INC     HL
+            LD      A, (HL)
+            LD      (EVIDX), A
+            LD      L, A
+            LD      A, (EVB0)
+            RLCA
+            RLCA
+            RLCA
+            AND     7
+            LD      H, A
+            LD      (EVIDXW), HL
+            ADD     HL, HL
+            ADD     HL, HL
+            ADD     HL, HL
+            LD      DE, (H_DATA)
+            ADD     HL, DE
+            LD      (EVDATA), HL
+            LD      A, (EVB0)
+            AND     $1F
+            CP      20
+            JP      NC, sv_invalid
+            ADD     A, A
+            LD      E, A
+            LD      D, 0
+            LD      HL, ev_table
+            ADD     HL, DE
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)
+            EX      DE, HL
+            JP      (HL)
+ev_table
+            DW      ev_gain, ev_base, ev_mult, ev_chan, ev_chan, ev_gains
+            DW      ev_chan, ev_chan, ev_chan, ev_lfo, ev_phase, ev_amp
+            DW      ev_loop, ev_end, ev_call, ev_track, ev_jump, ev_yield
+            DW      ev_repeat, ev_repeat
+
+ev_gain
+            LD      A, (EVVAL)
+            LD      (MGAIN), A
+            LD      B, 0
+eg_l
+            LD      A, B
+            CALL    attn
+            LD      A, $78
+            ADD     A, B
+            LD      D, A
+            CALL    w
+            INC     B
+            LD      A, B
+            CP      8
+            JR      NZ, eg_l
+            JP      ev_loop
+ev_base
+            LD      A, (EVVAL)
+            LD      (BASE), A
+            LD      HL, 0
+            LD      (FRAC), HL
+            JP      ev_loop
+ev_mult
+            LD      A, (EVVAL)
+            LD      (MULT), A
+            JP      ev_loop
+needdata
+            LD      HL, (EVIDXW)
+            LD      A, H
+            CP      7
+            RET     NZ
+            LD      A, L
+            CP      $FF
+            RET     NZ
+            POP     HL              ; drop return, abort
+            JP      sv_invalid
+ev_gains
+            CALL    needdata
+            LD      B, 7            ; source applies gains in descending order
+eq_l
+            CALL    dac_poll
+            LD      A, B
+            CALL    bitmask
+            LD      HL, EVMASK
+            AND     (HL)
+            JR      Z, eq_n
+            LD      HL, (EVDATA)
+            LD      E, B
+            LD      D, 0
+            ADD     HL, DE
+            LD      A, (HL)
+            LD      HL, CHGAIN
+            LD      E, B
+            ADD     HL, DE
+            LD      (HL), A
+            LD      A, B
+            CALL    attn
+            LD      A, $78
+            ADD     A, B
+            LD      D, A
+            CALL    w
+eq_n
+            DEC     B
+            JP      P, eq_l
+            JP      ev_loop
+ev_chan
+            CALL    needdata
+            LD      B, 0
+ec_l
+            CALL    dac_poll
+            LD      A, B
+            CALL    bitmask
+            LD      HL, EVMASK
+            AND     (HL)
+            JP      Z, ec_n
+            LD      HL, (EVDATA)
+            LD      E, B
+            LD      D, 0
+            ADD     HL, DE
+            LD      C, (HL)         ; per-channel value
+            LD      A, (EVB0)
+            AND     $1F
+            CP      4
+            JR      Z, ec_instr
+            CP      3
+            JR      Z, ec_note
+            CP      7
+            JR      Z, ec_pitch
+            CP      6
+            JR      Z, ec_frac
+            LD      A, C            ; 8: modulation
+            AND     $73
+            LD      E, A
+            LD      A, $38
+            JR      ec_wr
+ec_frac
+            LD      A, C
+            AND     $FC
+            LD      E, A
+            LD      A, $30
+            JR      ec_wr
+ec_pitch
+            LD      A, C
+            CP      $FF
+            JR      Z, ec_n
+            LD      E, A
+            LD      A, $28
+ec_wr
+            ADD     A, B
+            LD      D, A
+            CALL    w
+            JR      ec_n
+ec_note
+            LD      D, $08
+            LD      E, B
+            CALL    w
+            LD      A, C
+            CP      $FF
+            JR      Z, ec_n
+            LD      E, A
+            LD      A, $28
+            ADD     A, B
+            LD      D, A
+            CALL    w
+            LD      A, B
+            OR      $78
+            LD      E, A
+            LD      D, $08
+            CALL    w
+            JR      ec_n
+ec_instr
+            LD      A, C            ; patch number -> 28 source registers
+            CP      $FF
+            JR      Z, ec_n
+            ADD     A, A
+            LD      E, A
+            LD      D, 0
+            LD      HL, (H_PATCHES)
+            ADD     HL, DE
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)
+            LD      (PATCHPTR), DE
+            LD      A, $20
+            ADD     A, B
+            LD      C, 28
+ei_l
+            LD      D, A            ; register (A is clobbered by the poll)
+            CALL    dac_poll
+            LD      HL, (PATCHPTR)
+            LD      E, (HL)
+            INC     HL
+            LD      (PATCHPTR), HL
+            PUSH    DE
+            CALL    w
+            POP     DE
+            LD      A, D
+            ADD     A, 8
+            DEC     C
+            JR      NZ, ei_l
+ec_n
+            INC     B
+            LD      A, B
+            CP      8
+            JP      NZ, ec_l
+            LD      A, (EVB0)
+            AND     $1F
+            CP      3
+            RET     Z               ; notes yield
+            JP      ev_loop
+ev_lfo
+            LD      D, $18
+            LD      A, (EVVAL)
+            LD      E, A
+            CALL    w
+            JP      ev_loop
+ev_phase
+            LD      A, (EVVAL)
+            OR      $80
+            JR      ev_19
+ev_amp
+            LD      A, (EVVAL)
+            AND     $7F
+ev_19
+            LD      E, A
+            LD      D, $19
+            CALL    w
+            JP      ev_loop
+ev_end
+            LD      A, (RETDEPTH)
+            OR      A
+            JR      NZ, ee_ret
+            LD      (STATUS), A     ; terminal end
+            RET
+ee_ret
+            DEC     A
+            LD      (RETDEPTH), A
+            LD      HL, (RETCUR)
+            LD      (CURSOR), HL
+            JP      ev_loop
+ev_call
+            LD      A, (EVVAL)
+            CALL    lookup
+            JP      C, sv_invalid
+            LD      DE, (CURSOR)
+            LD      (RETCUR), DE
+            LD      A, (RETDEPTH)
+            INC     A
+            LD      (RETDEPTH), A
+            CALL    install
+            JP      ev_loop
+ev_track
+            LD      A, (EVVAL)
+            CALL    lookup
+            JP      C, sv_invalid
+            CALL    install
+            JP      ev_loop
+ev_jump
+            LD      A, (EVVAL)
+            LD      L, A
+            LD      A, (EVMASK)
+            LD      H, A
+            LD      (CURSOR), HL
+            JP      ev_loop
+ev_yield
+            RET
+; Counted loops (MCU $850C/$8565).
+ev_repeat
+            CALL    needdata
+            LD      A, (EVB0)
+            AND     $1F
+            SUB     19
+            JR      Z, er_c
+            LD      A, 0
+            JR      er_c2
+er_c
+            LD      A, 1
+er_c2
+            LD      (RCOND), A
+            LD      HL, (EVDATA)
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)
+            INC     HL
+            LD      (RFIRST), DE
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)
+            LD      (RREPEAT), DE
+            LD      HL, (CURSOR)
+            DEC     HL
+            LD      (RKEY), HL
+            XOR     A
+            LD      (RFOUND), A
+            LD      A, (LASTLOOP)
+            LD      C, A            ; last
+            LD      B, 0            ; slot
+er_scan
+            CALL    dac_poll
+            LD      HL, LOOPCNT
+            LD      E, B
+            LD      D, 0
+            ADD     HL, DE
+            LD      A, (HL)
+            OR      A
+            JR      NZ, er_used
+            LD      C, B
+            JR      er_next
+er_used
+            LD      HL, LOOPKEY
+            ADD     HL, DE
+            ADD     HL, DE
+            LD      E, (HL)
+            INC     HL
+            LD      D, (HL)
+            LD      HL, (RKEY)
+            OR      A
+            SBC     HL, DE
+            JR      NZ, er_next
+            LD      C, B
+            LD      A, 1
+            LD      (RFOUND), A
+            JR      er_done
+er_next
+            INC     B
+            LD      A, B
+            CP      8
+            JR      NZ, er_scan
+er_done
+            LD      A, C
+            LD      (LASTLOOP), A
+            LD      E, C
+            LD      D, 0
+            LD      HL, LOOPCNT
+            ADD     HL, DE
+            LD      A, (RFOUND)
+            OR      A
+            JR      NZ, er_found
+            LD      (HL), 1
+            LD      HL, LOOPKEY
+            ADD     HL, DE
+            ADD     HL, DE
+            LD      DE, (RKEY)
+            LD      (HL), E
+            INC     HL
+            LD      (HL), D
+            LD      A, (RCOND)
+            OR      A
+            JR      NZ, er_next_c
+            LD      HL, (RFIRST)
+            JR      er_set
+er_found
+            INC     (HL)
+            LD      A, (EVVAL)
+            CP      (HL)
+            JR      NZ, er_again
+            LD      (HL), 0
+            LD      A, (RCOND)
+            OR      A
+            JR      Z, er_next_c
+            LD      HL, (RFIRST)
+            JR      er_set
+er_again
+            LD      A, (RCOND)
+            OR      A
+            JR      NZ, er_next_c
+            LD      HL, (RREPEAT)
+            JR      er_set
+er_next_c
+            LD      HL, (CURSOR)
+er_set
+            LD      (CURSOR), HL
+            JP      ev_loop
+
+sv_invalid
+            XOR     A
+            LD      (STATUS), A
+            LD      (ACTIVE), A
+            JP      silence

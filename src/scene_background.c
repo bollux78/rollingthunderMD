@@ -1,0 +1,1 @@
+/* Artwork lives in the completion bank. */

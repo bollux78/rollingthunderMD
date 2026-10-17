@@ -1,0 +1,5 @@
+/* Generated verified clip locations; no runtime admission implied. */
+#define RT_FINAL_VICTORY_ADDRESS 0x1980000UL
+#define RT_FINAL_VICTORY_SAMPLES 76755UL
+#define RT_FINAL_ENDING_AFTER_VICTORY_ADDRESS 0x1a00000UL
+#define RT_FINAL_ENDING_AFTER_VICTORY_SAMPLES 584641UL
