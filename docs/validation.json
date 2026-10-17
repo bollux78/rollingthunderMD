@@ -1,18 +1,50 @@
 {
-  "rom_sha256": "c7efdd789711c4bc88a1cabc781070cac25586594221b53dafad38c3afeb02ef",
+  "rom_sha256": "133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8",
   "bytes": 33554432,
-  "banked_bytes_identical_to_frozen_build": true,
+  "previous_build_sha256": "c7efdd789711c4bc88a1cabc781070cac25586594221b53dafad38c3afeb02ef",
+  "banked_bytes_identical_to_previous_build": true,
   "banked_bytes_compared": 32505856,
-  "sram_header": "RA F820 00200001 0020FFFF",
   "host_save_tests": {
     "passed": true,
     "interrupted_write_points": 65,
-    "empty_and_corrupt_defaults": true,
-    "unchanged_payload_does_not_write": true,
+    "warm_reset_without_sram_reads": true,
+    "corrupt_mirror_fallback": true,
     "unwritable_sram_detected": true
   },
+  "soft_reset": {
+    "rom_sha256": "133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8",
+    "core_sha256": "0646e8d7896e27ee65073851bbd1daf713fb95fb63b7684103ed008518e84512",
+    "cases": [
+      {
+        "case": "arcade",
+        "soft_resets": 6,
+        "passed": true
+      },
+      {
+        "case": "campaign_1p",
+        "soft_resets": 6,
+        "passed": true
+      },
+      {
+        "case": "campaign_2p",
+        "soft_resets": 6,
+        "passed": true
+      },
+      {
+        "case": "survival_1p",
+        "soft_resets": 6,
+        "passed": true
+      },
+      {
+        "case": "survival_2p",
+        "soft_resets": 6,
+        "passed": true
+      }
+    ],
+    "scope": "Real PicoDrive soft resets; controller menu changes; diagnostic RAM-seeded scores/initials; no savestates or ROM changes."
+  },
   "pause": {
-    "rom_sha256": "c7efdd789711c4bc88a1cabc781070cac25586594221b53dafad38c3afeb02ef",
+    "rom_sha256": "133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8",
     "cases": {
       "campaign_1p": {
         "runtime_faults": 0,
@@ -40,87 +72,12 @@
       }
     }
   },
-  "arcade_pause": {
-    "rom_sha256": "c7efdd789711c4bc88a1cabc781070cac25586594221b53dafad38c3afeb02ef",
-    "arcade_pause": true,
-    "solo_second_controller_ignored": true,
-    "runtime_faults": 0
-  },
   "persistence": {
-    "rom_sha256": "c7efdd789711c4bc88a1cabc781070cac25586594221b53dafad38c3afeb02ef",
+    "rom_sha256": "133fea599cb00cb5de33d9fae86b9c15b9e18e5760b4497a2f906101ca74b6b8",
     "controller_settings_roundtrip": true,
     "cold_boot_best_and_initials": true,
     "corrupt_newest_slot_fallback": true,
-    "scope": "Real PicoDrive SRAM across fresh core processes. Settings changed by controller. Best score/table seeded by diagnostic RAM writes, then saved by production pause path. No savestates.",
-    "picodrive_soft_reset_restores_sram": false,
-    "restore_method": "Reload ROM / cold boot"
+    "scope": "Real PicoDrive SRAM across fresh core processes. Settings changed by controller. Best score/table seeded by diagnostic RAM writes, then saved by production pause path. No savestates."
   },
-  "opening_smoke": {
-    "rom_sha256": "c7efdd789711c4bc88a1cabc781070cac25586594221b53dafad38c3afeb02ef",
-    "refreshes_per_run": 4200,
-    "cases": {
-      "campaign_1p_0": {
-        "play_refreshes": 3299,
-        "runtime_faults": 0,
-        "policy_values": [
-          0
-        ]
-      },
-      "campaign_1p_1": {
-        "play_refreshes": 3315,
-        "runtime_faults": 0,
-        "policy_values": [
-          0
-        ]
-      },
-      "campaign_2p_0": {
-        "play_refreshes": 1605,
-        "runtime_faults": 0,
-        "policy_values": [
-          0,
-          1
-        ]
-      },
-      "campaign_2p_1": {
-        "play_refreshes": 1625,
-        "runtime_faults": 0,
-        "policy_values": [
-          0,
-          1
-        ]
-      },
-      "survival_1p_0": {
-        "play_refreshes": 1991,
-        "runtime_faults": 0,
-        "policy_values": [
-          0
-        ]
-      },
-      "survival_1p_1": {
-        "play_refreshes": 3377,
-        "runtime_faults": 0,
-        "policy_values": [
-          0
-        ]
-      },
-      "survival_2p_0": {
-        "play_refreshes": 1302,
-        "runtime_faults": 0,
-        "policy_values": [
-          0,
-          1
-        ]
-      },
-      "survival_2p_1": {
-        "play_refreshes": 1304,
-        "runtime_faults": 0,
-        "policy_values": [
-          0,
-          1
-        ]
-      }
-    },
-    "scope": "Unmodified clean-checkout production ROM; controller-only Home Campaign/Survival, both agents, 1P/2P; no RAM patches. Opening smoke coverage, not full-game or hardware certification."
-  },
-  "limits": "Emulator checks, not a natural full-game playthrough or physical-cartridge certification. Best/table cold-boot test used diagnostic RAM seeding; settings and pause tests used controller input."
+  "limits": "PicoDrive emulator validation; no physical-hardware certification or full natural playthrough. Score/initials tests use diagnostic work-RAM seeding, followed by real production saves and resets."
 }

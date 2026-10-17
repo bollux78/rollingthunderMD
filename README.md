@@ -95,9 +95,8 @@ changed; scores save at life/stage boundaries, game over, completed initials
 entry and when you pause. Pause before powering off to save an ongoing run's
 best score. Progress/lives are not resumed from SRAM. Empty or invalid SRAM
 uses defaults; two CRC-checked slots protect against interrupted writes. Enable
-battery saves in your emulator and retain its `.srm` file. In the tested PicoDrive
-core, reload the ROM to restore saves; soft reset does not restore SRAM after
-SSF bank remapping. The cartridge requires
+battery saves in your emulator and retain its `.srm` file. Soft reset returns to the menu and restores the last committed save, including
+after playing or pausing. The cartridge requires
 SSF banking **and** standard odd-byte SRAM at `$200001–$20FFFF`.
 
 The public build removes boot intros, updates the cartridge title, and adds

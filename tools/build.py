@@ -93,9 +93,11 @@ def main():
  rows=json.loads((ROOT/'assets/stages/manifest.json').read_text());images=[build_stage(row,sdk,build,game/'inc',a.jobs) for row in rows]
  completion=build_completion(sdk,build,game/'inc')
  print('Compiling the Mega Drive runtime...',flush=True)
- env=dict(os.environ,GDK=str(sdk));result=subprocess.run(['make','-j'+str(a.jobs),'-f',str(sdk/'makefile.gen'),'release'],cwd=game,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True);(build/'compile.log').write_text(result.stdout)
+ env=dict(os.environ,GDK=str(sdk));result=subprocess.run(['make','-j'+str(a.jobs),'-f',str(sdk/'makefile.gen'),'-f',str(ROOT/'tools/runtime.mk'),'release'],cwd=game,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True);(build/'compile.log').write_text(result.stdout)
  if result.returncode:raise RuntimeError(result.stdout[-12000:])
  symbols={v[2]:int(v[0],16) for line in (game/'out/release/symbol.txt').read_text().splitlines() if len(v:=line.split())==3}
+ if symbols['__wrap__reset_entry']>=0x80000:raise ValueError('Soft reset must execute in fixed mapper window 0')
+ if (symbols['_bend']&0xffff)>=0xf000:raise ValueError('Soft reset needs stack space above C globals')
  span=symbols['_stext']+symbols['_sdata'];fixed=(game/'out/release/rom.bin').read_bytes()
  if span>0x100000 or len(fixed)>0x100000:raise ValueError('Fixed code overlaps banked graphics')
  raw=bytearray(0x2000000);raw[:len(fixed)]=fixed

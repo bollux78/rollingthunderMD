@@ -5,5 +5,10 @@
  * Call only with ROM DMA drained and outside an active entry IRQ. */
 bool RT_saveLoad(u8 records[35],u32 *best,u8 *credits,u8 *psgMuted);
 bool RT_saveStore(const u8 records[35],u32 best,u8 credits,u8 psgMuted);
+/* Warm reset carries only committed, CRC-checked slots across C global reset.
+ * Export/import never access SRAM or perform a new save. */
+typedef struct {u8 slots[2][64],available;} RT_SaveReset;
+void RT_saveResetExport(RT_SaveReset *state);
+void RT_saveResetImport(const RT_SaveReset *state);
 extern volatile u8 rtSaveAvailable;
 #endif
