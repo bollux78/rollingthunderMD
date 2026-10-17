@@ -63,7 +63,8 @@ enum {
 
 /* Each slot exclusively owns a fixed VRAM range below C000. Initialize slots
  * after terrain initialization; never share overlapping ranges. Pose pixels
- * are unbanked ROM and must stay accessible until the next DMA flush. */
+ * are CPU-mapped ROM or tagged physical addresses. Use DMA_QUEUE for tagged
+ * poses; its backend temporarily maps window 7, then restores that mapping. */
 u8 RT_spriteSlotInitialize(RT_SpriteSlot *slot,u16 firstTile,u16 capacity);
 void RT_spritesBegin(RT_SpriteBatch *batch);
 /* Reserve four hardware mask records to clip sprites to scanlines24..215. */

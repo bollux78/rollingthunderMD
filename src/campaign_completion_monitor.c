@@ -1,4 +1,5 @@
 #include "rt_stage_bank.h"
+#include "rt_rom_layout.h"
 #include "rt_campaign_completion_monitor.h"
 void RT_completionMonitorFormat(u32 high,u32 player0,u32 player1,u16 timer,u8 digits[24])
 {
@@ -44,7 +45,7 @@ static u8 show(u8 labelIndex)
 {
  RT_stopStageRaster();RT_stopStageTransitionRaster();VDP_setEnable(FALSE);
  DMA_flushQueue();
- if(!RT_stageBankSelect(50))return 0;
+ if(!RT_stageBankSelect(RT_COMPLETION_PAGE))return 0;
  if(!RT_sceneBackgroundUpload(&rtCompletionMonitorBackground))return 0;
  VDP_loadTileData(rtCompletionMonitorHud.patterns,1,rtCompletionMonitorHud.count,DMA);
  for(u8 i=0;i<24;i++)previous[i]=255;

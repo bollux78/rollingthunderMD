@@ -1,9 +1,12 @@
 #include <genesis.h>
+#include "rt_rom_layout.h"
 
 __attribute__((externally_visible))
 const ROMHeader rom_header = {
 #if (MODULE_MEGAWIFI  && (MEGAWIFI_IMPLEMENTATION == MEGAWIFI_IMPLEMENTATION_MW_CART))
     "SEGA MEGAWIFI   ",
+#elif RT_CART_EXTENDED_SSF
+    "SEGA SSF        ",
 #else
     /* Standard SSF2 bank registers + SRAM, not Krikzz's extended SSF. */
     "SEGA MEGA DRIVE ",
@@ -24,8 +27,13 @@ const ROMHeader rom_header = {
     0x00FFFFFF,
     "RA",
     0xF820,
+#if RT_CART_EXTENDED_SSF
+    0x00240001,
+    0x0024FFFF,
+#else
     0x00200001,
     0x0020FFFF,
+#endif
     "            ",
     "DEMONSTRATION PROGRAM                   ",
     "JUE             "

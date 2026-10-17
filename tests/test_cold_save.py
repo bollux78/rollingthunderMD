@@ -12,7 +12,11 @@ from test_soft_reset import Machine
 
 
 def worker(args):
-    m = Machine(args)
+    if getattr(args, 'everdrive_model', False):
+        from test_everdrive_model import ProMachine
+        m = ProMachine(args)
+    else:
+        m = Machine(args)
     assert m.number('rtSaveAvailable') == 1
     if args.phase == 'write':
         for button in (5, 3, 5, 5, 3, 7, 5, 5, 3, 8, 3):
@@ -38,6 +42,7 @@ def worker(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--everdrive-model', action='store_true', help='Use the documented extended-SSF software bus model; not physical hardware')
     p.add_argument('--core', type=Path, required=True)
     p.add_argument('--rom', type=Path, default=Path('dist/RollingThunderMD.bin'))
     p.add_argument('--symbols', type=Path, default=Path('.build/game/out/release/symbol.txt'))
@@ -53,6 +58,7 @@ def main():
         broken = Path(folder) / 'broken.srm'
         command = [sys.executable, str(Path(__file__).resolve()), '--core', str(args.core),
                    '--rom', str(args.rom), '--symbols', str(args.symbols)]
+        if args.everdrive_model: command.append('--everdrive-model')
         def run(phase, *extra):
             result = subprocess.run(command + ['--phase', phase, *map(str, extra)],
                                     capture_output=True, text=True, timeout=45)
@@ -78,10 +84,11 @@ def main():
         broken.write_bytes(raw)
         run('recover', '--sram-load', broken)
     report = dict(rom_sha256=hashlib.sha256(args.rom.read_bytes()).hexdigest(),
+                  extended_ssf_software_model=args.everdrive_model, physical_hardware_tested=False,
                   core_sha256=hashlib.sha256(args.core.read_bytes()).hexdigest(),
                   cold_restore_pass=True, corrupt_slot_fallback_pass=True,
                   scope='Three fresh core processes; controller settings, RAM-seeded score '
-                        'and initials saved through P2 pause; real SRAM, no savestates.')
+                        'and initials saved through P2 pause; emulator/model battery RAM, no savestates.')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))

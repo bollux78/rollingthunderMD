@@ -186,7 +186,7 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(args.output)
-    # Current oversized ROM must fail the compatibility gate even without cores.
+    # Capacity/checksum failures remain blockers even without emulator probes.
     return int(report['exceeds_16_mib'] or not report['checksum_valid'] or
                any(not row['passed'] for row in report['cases']))
 

@@ -1,106 +1,102 @@
 # Hardware compatibility — October 17, 2026
 
-**The current 32 MiB development build is still not ready for retail EverDrives.**
-The GX boot/SRAM crash, dirty-launch initialization and null Team Player callback
-have been corrected. ROM capacity and device-specific mapper validation remain.
-No physical console, EverDrive, MegaSD or MiSTer was connected or tested.
+The compact ROM is **15.5 MiB (16,252,928 bytes)**, down from 32 MiB. Two
+profiles are built from the same assets and gameplay code:
 
-ROM SHA256: `58a62d053a9f10a0f610b3e7fce55593693cca90738d3e946d6ee6c066864412`.
+- `RollingThunderMD.bin`: standard SSF2 banking and odd-byte SRAM, tested in
+  PicoDrive and Genesis Plus GX.
+- `RollingThunderMD-MegaEverDrivePro.bin`: extended SSF banking and banked
+  battery RAM, intended for Mega EverDrive Pro. Software protocol tests pass;
+  **no physical cart or console has been tested**.
 
-## Verified changes
+The Pro profile is ready for physical testing, not a hardware compatibility
+certificate. Neither profile supports every EverDrive.
 
-| Check | Current result |
+## Target matrix
+
+| Target | Status |
 | --- | --- |
-| PicoDrive, US NTSC / European PAL / Japanese NTSC | All pass opening Campaign 2P, P2 pause/resume, soft reset and restart with music |
-| Genesis Plus GX, same regions | All pass the same checks; previously failed boot |
-| GX with dirty RAM and initialized controller I/O | All three regions pass; a committed same-build marker replaces the I/O warm-reset heuristic |
-| C initialized-data image | All 104 bytes match ROM before SDK initialization in cold/dirty GX launches |
-| Soft resets across Arcade, Campaign 1P/2P, Survival 1P/2P | 60 pass across the two cores |
-| Fresh-process SRAM restore and corrupt-slot fallback | Pass on both cores |
-| Graphics/audio bank comparison | All 31 MiB byte-identical to the previous build |
-| GX Team Player 3/6-button held-input startup/reset | Both pass, three resets each; physical adapter untested |
-| Physical hardware | Untested |
-
-The region probes change only the header in temporary ROM copies. They test
-liveness and opening gameplay, not full campaigns, physical VDP timing, analog
-output or flash-cart firmware. Exact core hashes, initial-data checks and mapper
-write traces are in [compatibility.json](compatibility.json); save/reset evidence
-and reproduction commands are in [VALIDATION.md](VALIDATION.md).
-
-## Mapper correction
-
-The runtime uses standard SSF2 bank registers plus standard SRAM at `$A130F1`.
-Its old `SEGA SSF` header selected GX's extended mapper, where the first save-enable
-write replaced bank zero and the running code. The header now says
-`SEGA MEGA DRIVE`, selecting the appropriate default bank/SRAM behavior in the
-tested cores. The trace confirms save writes leave bank zero unchanged.
-
-This is an emulator compatibility fix, not an implementation of Krikzz's banked
-save protocol. A physical extended-SSF build would need a supported layout and
-separate banked SRAM access. The old and current EverDrive implementations also
-differ, so a GX pass must not stand in for device testing. References:
-[Krikzz extended-SSF protocol](https://krikzz.com/pub/support/mega-everdrive/x3x5x7/dev/extended_ssf-v2.txt),
-[published mapper](https://github.com/krikzz/mega-ed-pub/blob/master/fpga/mapper/map_ssf/map_ssf.sv),
-[GX mapper implementation](https://github.com/ekeeke/Genesis-Plus-GX/blob/master/core/cart_hw/md_cart.c).
-
-## Capacity remains the main blocker
-
-The ROM is 33,554,432 bytes. Its linked stage banks alone occupy 22,829,484
-bytes, and its last nonzero byte ends at offset 31,527,525. Trimming trailing
-padding cannot make it fit. No enemies, animation frames or audio were removed.
-
-| Target family | Published capacity / audit status |
-| --- | --- |
-| Mega EverDrive Pro | 16 MB PSRAM; current image exceeds it |
-| Mega EverDrive Core | 8 MB PSRAM; current image exceeds it |
-| Mega EverDrive X3 / X5 | 7 MB maximum ROM; current image exceeds it |
-| Mega EverDrive v2 / X7 family | Official support manual lists 16 MB PSRAM; current image exceeds it. Manual's maximum-ROM line has contradictory units, so no exact usable limit is asserted here |
-| Original Mega EverDrive v1; legacy EverDrive-MD v1/v2/v3 | No support claim. Exact revision/firmware capacity and mapper behavior remain to be verified; these need their own test rows before release |
-| Custom physical cartridge | Requires a specified mapper/memory design; none tested |
+| Mega EverDrive Pro | Fits its published 16 MB memory capacity. Dedicated extended-SSF profile; ROM stops before bank 31, which the published mapper assigns to battery RAM. Physical launch, menu backup and power-cycle persistence remain unverified. |
+| Mega EverDrive Core | Unsupported by this build: exceeds its 8 MB memory capacity. |
+| Mega EverDrive X3 / X5 | Unsupported by this build: exceeds the published 7 MB ROM limit. |
+| Mega EverDrive v2 / X7 family | No support claim. Older extended-SSF documentation reserves banks 30–31 for the OS; this layout uses bank 30. The Pro profile must not be treated as an X7 profile. |
+| Original Mega EverDrive v1; legacy EverDrive-MD v1/v2/v3 | Unverified and not supported by the supplied profiles; exact revision/firmware limits need separate evidence. |
+| Model 1 with/without TMSS, Model 2, Model 3, Nomad; NTSC/PAL | CPU/VDP startup measures and emulator region checks are covered. No physical console tested. |
+| MegaSD, MiSTer, clones, 32X/CD combinations, custom cartridges | No compatibility claim; require separate mapper and device testing. |
 
 Sources: [Pro specifications](https://krikzz.com/our-products/cartridges/mega-everdrive-pro.html),
 [Core specifications](https://krikzz.com/our-products/cartridges/mega-everdrive-core.html),
 [X3 specifications](https://krikzz.com/our-products/cartridges/mega-everdrive-x3.html),
 [X5 specifications](https://krikzz.com/our-products/cartridges/mega-everdrive-x5.html),
-[v2 manual in the X3/X5/X7 support directory](https://krikzz.com/pub/support/mega-everdrive/x3x5x7/Mega%20Everdrive-v2%20user%20manual%20%20EN.pdf).
+[older extended-SSF protocol](https://krikzz.com/pub/support/mega-everdrive/x3x5x7/dev/extended_ssf-v2.txt),
+[Pro mapper implementation](https://github.com/krikzz/mega-ed-pub/blob/master/fpga/mapper/map_ssf/map_ssf.sv).
 
-Meeting a file-size limit alone is insufficient: reserved OS/save banks and
-supported mapper registers also constrain the usable layout. Older Krikzz
-extended-SSF documentation mentions possible 16/32 MB memory implementations;
-that is not evidence of 32 MB support in the retail models above.
+## Lossless layout
 
-## Side Arms changes reviewed and applied
+The builder first reproduces all ten frozen stage banks. It then interns repeated
+geometry, uses the existing 16-cell map-block representation, and shares raw pose
+pixels across stages. Identical suffix/prefix tiles can overlap in the physical
+pixel pool. Every pose remains contiguous raw pixels; no image decompression or
+new decode buffer runs during gameplay.
 
-| Side Arms lesson | Rolling Thunder status |
-| --- | --- |
-| Match header to actual mapper/SRAM protocol | Corrected for the current standard-SSF2 development build; hardware profile still pending |
-| Safe entry/TMSS after a flash-cart menu | Applied through build-local SDK assembly adaptation; retained state is validated and callbacks rebuilt |
-| Exact Z80 upload under GCC 16 | Already present; the same compiler hazard was newly found and fixed in reset's C-data copy |
-| Protect DMA command sequences from H-interrupts | Existing project DMA guards retained; physical raster timing unverified |
-| Guard null Team Player callback | Applied to the vendored reader |
-| Conventional work-RAM header | Corrected to `$00FF0000–$00FFFFFF` |
-| Validate copied SRAM after restoring ROM mapping | Existing behavior retained; two-slot save format unchanged |
-| Disable mapper writes for a linear ROM at most 4 MiB | Cannot copy directly: this game genuinely uses banks |
+General enemy geometry is omitted only where the gameplay renderer exclusively
+uses its equivalent packed geometry. Player and stage-object general geometry
+is retained. Enemy counts, animation selection policy, audio samples and every
+rendered pose remain unchanged. The build compares linked pixels and geometry,
+background maps/palettes and collision data against the frozen banks. Completion
+assets are relinked with pointer-only changes; their pixels remain unchanged.
 
-Side Arms' worktree was not modified. Its hardware successes apply to its own
-specific builds/devices. The original failing audit is preserved in
-[commit 4002165](https://github.com/rester159/rollingthunderMD/blob/4002165/docs/HARDWARE_COMPATIBILITY.md).
+Shared-pose DMA temporarily maps window 7, transfers the pixels, and restores the
+previous mapping. Existing 128 KiB DMA-boundary splitting is retained. The fixed
+runtime stays below 1 MiB; compact stage metadata stays below window 7. UI and
+short victory PCM occupy spare space around the fixed bank. All four finite
+clips are checked with the actual runtime alignment/span planners during build.
 
-## Remaining work
+## Mapper and saves
 
-1. Repack the assets within the chosen cart's usable ROM space, including its
-   reserved OS/save banks. Simple sharing of complete poses is insufficient;
-   finer sharing or compression needs rendering-cost and RAM-budget measurements.
-2. Select the actual supported mapper per hardware tier and implement its SRAM
-   protocol where needed. Re-test cold load, interrupted saves, reset and bank
-   restoration while audio is active.
-3. Physically test US/Japanese NTSC and European PAL, Model 1 with/without TMSS,
-   Model 2, Model 3 and Nomad where applicable. Record cart revision/OS, console
-   revision, cold power-on, menu launch, held buttons, reset-to-game/menu, 1P/2P,
-   every stage transition, long audio playback and SRAM after menu return and
-   power cycling. MiSTer, MegaSD, clones and 32X/CD configurations need separate
-   rows.
+The standard profile declares `SEGA MEGA DRIVE` and uses `$A130F1` SRAM control
+at `$200001–$20FFFF`. This avoids the previous GX extended-mapper boot crash.
 
-`tests/check_compatibility.py` deliberately still returns status 1: all nine
-emulator cases pass, but the 16 MiB capacity gate fails. This is not a hardware
-release certificate.
+The Pro profile declares `SEGA SSF`. Saves temporarily map physical bank 31 into
+CPU window 4 and access its upper half through `$240001`. Protected word writes
+`$A000` / `$8000` at `$A130F0` open/close the write gate while keeping bank zero
+fixed. Interrupts and Z80 bus consumers are held during the transaction. The
+previous mapping is restored before they resume. Reset closes the write gate
+before restoring application state. The two-slot CRC/commit-last format remains
+unchanged.
+
+GX does not implement this cartridge's complete write-gate/banked-RAM behavior.
+`tests/test_everdrive_model.py` supplies a software bus model based on Krikzz's
+published register logic and runs the actual Pro binary. It checks save writes,
+reset, an interrupted-save reset condition and absence of writes to ROM. Fresh
+processes also test persistence and corrupt-slot fallback. This tests our
+protocol usage; it does not test the FPGA, firmware, electrical timing or OS save
+backup behavior on a real cartridge.
+
+## Side Arms measures retained
+
+- Unconditional TMSS/startup path after a flash-cart menu; validated warm-reset
+  marker instead of controller-I/O heuristics.
+- Exact initialized-data and Z80 copies under GCC 16.
+- DMA control-port writes guarded against raster interrupts and conflicting
+  Z80 bus activity; DMA triggers use memory operands.
+- Null Team Player callback guard, tested with held inputs on 3/6-button modes.
+- Conventional `$00FF0000–$00FFFFFF` work-RAM header.
+- Save validation after restoring ROM mapping; committed mirrors survive reset.
+
+Side Arms was inspected without modifying its worktree. Its device results do
+not certify this game. Its linear-ROM mapper workaround cannot apply to a game
+that still requires bank switching.
+
+## Physical validation still required
+
+Record cartridge model/revision and OS, console revision/region and attached
+hardware. Check cold power-on, launch from the cart menu, held buttons, reset to
+game/menu, 1P/2P, all stage transitions, long audio playback, and saves after menu
+return and full power cycling. Confirm the Pro OS actually backs up the banked
+battery data. Smaller cartridges need a substantially smaller, separately
+validated build; a header change alone cannot make this image fit.
+
+Exact software results and artifact hashes are in [VALIDATION.md](VALIDATION.md)
+and [validation.json](validation.json). The earlier 32 MiB audit is preserved in
+[commit f035d7e](https://github.com/rester159/rollingthunderMD/blob/f035d7e/docs/HARDWARE_COMPATIBILITY.md).

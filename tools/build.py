@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the frozen native port from source plus an owner-supplied arcade ROM set."""
+"""Build the native port from source plus an owner-supplied arcade ROM set."""
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from zipfile import ZipFile
@@ -81,10 +81,11 @@ def build_completion(sdk,build,inc):
  return data
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--rom',required=True,type=Path,help='Owner-supplied Rolling Thunder rev. 3 arcade ZIP');p.add_argument('--sgdk',type=Path,default=os.environ.get('GDK'));p.add_argument('--jobs',type=int,default=min(8,os.cpu_count() or 1));a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--rom',required=True,type=Path,help='Owner-supplied Rolling Thunder rev. 3 arcade ZIP');p.add_argument('--sgdk',type=Path,default=os.environ.get('GDK'));p.add_argument('--cart',choices=['standard','mega-everdrive-pro'],default='standard');p.add_argument('--output-dir',type=Path,default=ROOT/'dist');p.add_argument('--layout',choices=['compact','frozen'],default='compact');p.add_argument('--jobs',type=int,default=min(8,os.cpu_count() or 1));a=p.parse_args()
  if not a.rom.is_file():p.error('ROM archive not found; supply your own rthunder.zip')
  if not a.sgdk or not (a.sgdk/'makefile.gen').is_file():p.error('Pass --sgdk PATH or set GDK to an SGDK 2.12 installation')
  if a.jobs<1:p.error('--jobs must be positive')
+ if a.cart!='standard' and a.layout!='compact':p.error('Mega EverDrive Pro requires the compact layout')
  rom=a.rom.resolve();sdk=a.sgdk.resolve();build=ROOT/'.build';game=build/'game';game.mkdir(parents=True,exist_ok=True)
  for name in ['src','inc','res']:shutil.copytree(ROOT/name,game/name,dirs_exist_ok=True)
  (game/'tools').mkdir(exist_ok=True)
@@ -94,6 +95,19 @@ def main():
  audio=build_audio(game,rom,build/'audio',os.environ.get('CC','cc'),os.environ.get('CXX','c++'))
  rows=json.loads((ROOT/'assets/stages/manifest.json').read_text());images=[build_stage(row,sdk,build,game/'inc',a.jobs) for row in rows]
  completion=build_completion(sdk,build,game/'inc')
+ high=json.loads((ROOT/'assets/ui/high_score.json').read_text());high_data=b''.join(struct.pack('>'+str(len(high[n]))+'H',*high[n]) for n in ['scene','panel','maps'])
+ compact_report=None
+ if a.layout=='compact':
+  import compact_build
+  chunks,compact_report=compact_build.prepare(ROOT,sdk,build,game,rows,images,completion,high_data,audio,a.jobs,run)
+ layout=game/'inc/rt_rom_layout.h';text=layout.read_text()
+ import re
+ text=re.sub(r'^#define RT_CART_EXTENDED_SSF .*\n','',text,flags=re.M)
+ text=text.replace('#define RT_ROM_LAYOUT_H','#define RT_ROM_LAYOUT_H\n#define RT_CART_EXTENDED_SSF '+str(int(a.cart!='standard')))
+ layout.write_text(text)
+ pcm_check=build/'test-pcm-layout'
+ run([os.environ.get('CC','cc'),'-std=c99','-I'+str(ROOT/'tests/host'),'-I'+str(game/'inc'),ROOT/'src/pcm_rom_plan.c',ROOT/'src/pcm_segmented_plan.c',ROOT/'tests/test_pcm_layout.c','-o',pcm_check])
+ print(run([pcm_check]).strip(),flush=True)
  print('Compiling the Mega Drive runtime...',flush=True)
  env=dict(os.environ,GDK=str(sdk));result=subprocess.run(['make','-j'+str(a.jobs),'-f',str(sdk/'makefile.gen'),'-f',str(ROOT/'tools/runtime.mk'),'release'],cwd=game,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True);(build/'compile.log').write_text(result.stdout)
  if result.returncode:raise RuntimeError(result.stdout[-12000:])
@@ -102,20 +116,30 @@ def main():
  if (symbols['_bend']&0xffff)>=0xf000:raise ValueError('Soft reset needs stack space above C globals')
  span=symbols['_stext']+symbols['_sdata'];fixed=(game/'out/release/rom.bin').read_bytes()
  if span>0x100000 or len(fixed)>0x100000:raise ValueError('Fixed code overlaps banked graphics')
- raw=bytearray(0x2000000);raw[:len(fixed)]=fixed
- def place(page,data):
-  start=page*PAGE
-  if any(raw[start:start+len(data)]):raise ValueError('Overlapping ROM bank at '+str(page))
+ if compact_report and span>compact_build.HIGH_ADDRESS:raise ValueError('Fixed code overlaps compact UI/audio storage')
+ raw=bytearray(compact_build.ROM_BYTES if compact_report else 0x2000000);raw[:span]=fixed[:span]
+ occupied=[(0,span)]
+ def place_at(start,data):
+  if any(start<end and start+len(data)>begin for begin,end in occupied):raise ValueError('Overlapping ROM bank at '+str(start))
   if start+len(data)>len(raw):raise ValueError('ROM overflow')
   raw[start:start+len(data)]=data
- for row,data in zip(rows,images):place(row['page'],data)
- place(50,completion)
- high=json.loads((ROOT/'assets/ui/high_score.json').read_text());place(54,b''.join(struct.pack('>'+str(len(high[n]))+'H',*high[n]) for n in ['scene','panel','maps']))
- for page,data in audio.items():place(page,data)
- raw[0x100:0x110]=b'SEGA MEGA DRIVE ';raw[0x1a4:0x1a8]=struct.pack('>I',len(raw)-1);raw[0x1b0:0x1bc]=b'RA'+struct.pack('>HII',0xf820,0x200001,0x20ffff);raw[0x18e:0x190]=struct.pack('>H',sum(struct.unpack('>'+str((len(raw)-512)//2)+'H',raw[512:]))&65535)
- dist=ROOT/'dist';dist.mkdir(exist_ok=True);dest=dist/'RollingThunderMD.bin';dest.write_bytes(raw)
- report=dict(sha256=digest(raw),bytes=len(raw),fixed_span=span,sgdk_version='2.12',compiler=run([sdk/'bin/m68k-elf-gcc','-dumpfullversion']).strip(),stage_banks_reproduced=10,boot_intros=False,rom_archives_distributed=False)
- (dist/'build.json').write_text(json.dumps(report,indent=2)+'\n');(dist/'SHA256SUMS').write_text(report['sha256']+'  '+dest.name+'\n');print(str(dest)+'\nSHA256 '+report['sha256'],flush=True)
+  occupied.append((start,start+len(data)))
+ if compact_report:
+  for start,data in chunks:place_at(start,data)
+ else:
+  for row,data in zip(rows,images):place_at(row['page']*PAGE,data)
+  place_at(50*PAGE,completion);place_at(54*PAGE,high_data)
+  for page,data in audio.items():place_at(page*PAGE,data)
+ raw[0x100:0x110]=b'SEGA SSF        ' if a.cart!='standard' else b'SEGA MEGA DRIVE ';raw[0x1a4:0x1a8]=struct.pack('>I',len(raw)-1);raw[0x1b0:0x1bc]=b'RA'+struct.pack('>HII',0xf820,0x240001 if a.cart!='standard' else 0x200001,0x24ffff if a.cart!='standard' else 0x20ffff);raw[0x18e:0x190]=struct.pack('>H',sum(struct.unpack('>'+str((len(raw)-512)//2)+'H',raw[512:]))&65535)
+ if compact_report:
+  from verify_compact import verify
+  compact_report['verified_art']=verify(ROOT,sdk,run,rows,compact_report['stages'],raw)
+ dist=a.output_dir;dist.mkdir(parents=True,exist_ok=True);dest=dist/('RollingThunderMD-MegaEverDrivePro.bin' if a.cart!='standard' else 'RollingThunderMD.bin');dest.write_bytes(raw)
+ report=dict(sha256=digest(raw),artifact=dest.name,cartridge_profile=a.cart,bytes=len(raw),fixed_span=span,sgdk_version='2.12',compiler=run([sdk/'bin/m68k-elf-gcc','-dumpfullversion']).strip(),stage_banks_reproduced=10,layout=a.layout,compact=compact_report,boot_intros=False,rom_archives_distributed=False)
+ (dist/('build-mega-everdrive-pro.json' if a.cart!='standard' else 'build.json')).write_text(json.dumps(report,indent=2)+'\n')
+ sums=dist/'SHA256SUMS';lines=sums.read_text().splitlines() if sums.exists() else []
+ lines=[line for line in lines if not line.endswith('  '+dest.name)]+[report['sha256']+'  '+dest.name]
+ sums.write_text('\n'.join(sorted(lines))+'\n');print(str(dest)+'\nSHA256 '+report['sha256'],flush=True)
 if __name__=='__main__':
  try:main()
  except (RuntimeError,ValueError,KeyError,FileNotFoundError) as e:raise SystemExit(str(e))

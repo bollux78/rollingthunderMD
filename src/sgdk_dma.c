@@ -1,7 +1,7 @@
 /* SGDK dma.c, vendored from the local SGDK installation.
  * SGDK is Copyright Stephane Dallongeville, MIT licensed.
  * Project override: omit main-bus conflict holds for a verified local-bus Z80
- * consumer. DMA command generation and all other driver behavior are intact.
+ * consumer; tagged physical pose sources share a ROM pool through window 7.
  */
 #include "dma.h"
 
@@ -11,6 +11,7 @@
 #include "memory.h"
 #include "z80_ctrl.h"
 #include "rt_z80_bus_policy.h"
+#include "mapper.h"
 
 #include "kdebug.h"
 #include "tools.h"
@@ -45,9 +46,11 @@ static u16 dataBufferSize;
 static u16 queueIndex;
 static u16 queueIndexLimit;
 static u16 queueTransferSize;
+static u8 queueBanked;
 
 // do not share (assembly methods)
 extern void flushQueue(u16 num);
+extern void RT_flushBankedQueue(const DMAOpInfo *ops,u16 num,u16 restore);
 
 
 void DMA_init()
@@ -192,6 +195,7 @@ void DMA_setIgnoreOverCapacity(bool value)
 
 void DMA_clearQueue()
 {
+    queueBanked = 0;
     queueIndex = 0;
     queueIndexLimit = 0;
     queueTransferSize = 0;
@@ -256,7 +260,8 @@ void DMA_flushQueue()
     u8 z80Guard = RT_z80DmaGuardBegin();
 #endif  // HALT_Z80_ON_DMA
 
-    flushQueue(i);
+    if (!queueBanked) flushQueue(i);
+    else RT_flushBankedQueue(dmaQueues,i,SYS_getBank(7));
 
 #if (HALT_Z80_ON_DMA != 0)
     RT_z80DmaGuardEnd(z80Guard);
@@ -478,6 +483,17 @@ NO_INLINE bool DMA_queueDmaFast(u8 location, void* from, u16 to, u16 len, u16 st
 
     fromAddr = (u32) from;
 
+    /* Bit 31 distinguishes a physical shared-pose address from CPU ROM/RAM.
+     * The queue's otherwise fixed $97 register byte carries the page until
+     * flush; it is restored before writing the VDP control port. */
+    u8 physicalPage = 0;
+    if ((fromAddr & 0xFE000000UL) == 0x80000000UL)
+    {
+        physicalPage = 0x40 | ((fromAddr >> 19) & 63);
+        fromAddr = 0x380000UL | (fromAddr & 0x7FFFFUL);
+        queueBanked = 1;
+    }
+
     // get DMA info structure and pass to next one
     info = &dmaQueues[queueIndex];
 
@@ -488,6 +504,8 @@ NO_INLINE bool DMA_queueDmaFast(u8 location, void* from, u16 to, u16 len, u16 st
     info->regAddrMStep = 0x96008F00 + ((fromAddr << 7) & 0xFF0000) + step;
     // $17:H  $15:L (DMA address H & L)
     info->regAddrHAddrL = 0x97009500 + ((fromAddr >> 1) & 0x7F00FF);
+    if (physicalPage)
+        info->regAddrHAddrL = (info->regAddrHAddrL & 0x00FFFFFFUL) | ((u32)physicalPage << 24);
 
     // Trigger DMA
     switch(location)

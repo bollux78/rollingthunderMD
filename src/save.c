@@ -1,4 +1,7 @@
 #include "rt_save.h"
+#ifdef __m68k__
+#include "rt_rom_layout.h"
+#endif
 #define SLOT_SIZE 64
 #define PAYLOAD 10
 #define CHECKSUM 60
@@ -35,9 +38,34 @@ static bool valid(const u8 *p)
 }
 /* SRAM replaces ROM at $200000. Hold both interrupt and Z80 consumers until
  * the mapper is back in ROM mode; all save code/data live in the fixed bank. */
+#if RT_CART_EXTENDED_SSF
+/* Mega EverDrive Pro extended SSF: bank 31 is battery RAM. Use the upper
+ * half also specified by the older extended-SSF protocol. Protect ROM writes
+ * except for this interrupt/Z80-guarded transaction; bank zero stays zero. */
+static u8 saveBank;
+static bool enter(void)
+{
+    SYS_disableInts();bool bus=Z80_getAndRequestBus(TRUE);
+    saveBank=SYS_getBank(4);
+    *(vu8*)0xA130F9=31;
+    *(vu16*)0xA130F0=0xA000;
+    return bus;
+}
+static void leave(bool bus)
+{
+    *(vu16*)0xA130F0=0x8000;
+    *(vu8*)0xA130F9=saveBank;
+    if(!bus)Z80_releaseBus();SYS_enableInts();
+}
+static u8 readByte(u16 offset){return *(const vu8*)(0x240001UL+(u32)offset*2);}
+static void writeByte(u16 offset,u8 value){*(vu8*)(0x240001UL+(u32)offset*2)=value;}
+#else
 static bool enter(void){SYS_disableInts();bool bus=Z80_getAndRequestBus(TRUE);SRAM_enable();return bus;}
 static void leave(bool bus){SRAM_disable();if(!bus)Z80_releaseBus();SYS_enableInts();}
-static void readSlot(u8 slot,u8 *p){for(u8 i=0;i<SLOT_SIZE;i++)p[i]=SRAM_readByte(slot*SLOT_SIZE+i);}
+static u8 readByte(u16 offset){return SRAM_readByte(offset);}
+static void writeByte(u16 offset,u8 value){SRAM_writeByte(offset,value);}
+#endif
+static void readSlot(u8 slot,u8 *p){for(u8 i=0;i<SLOT_SIZE;i++)p[i]=readByte(slot*SLOT_SIZE+i);}
 bool RT_saveLoad(u8 records[35],u32 *best,u8 *credits,u8 *psgMuted)
 {
     u8 *a=cached[0],*b=cached[1];havePrevious=0;generation=0;activeSlot=1;
@@ -48,10 +76,10 @@ bool RT_saveLoad(u8 records[35],u32 *best,u8 *credits,u8 *psgMuted)
     }else{
         rtSaveAvailable=0;
         bool bus=enter();readSlot(0,a);readSlot(1,b);
-        u8 probe=SRAM_readByte(128);
-        SRAM_writeByte(128,probe^0xff);
-        rtSaveAvailable=SRAM_readByte(128)==(u8)(probe^0xff);
-        SRAM_writeByte(128,probe);leave(bus);
+        u8 probe=readByte(128);
+        writeByte(128,probe^0xff);
+        rtSaveAvailable=readByte(128)==(u8)(probe^0xff);
+        writeByte(128,probe);leave(bus);
     }
     bool va=valid(a),vb=valid(b);if(!va&&!vb)return FALSE;
     activeSlot=vb&&(!va||(s32)(get32(b+6)-get32(a+6))>0)?1:0;
@@ -69,9 +97,9 @@ bool RT_saveStore(const u8 records[35],u32 best,u8 credits,u8 psgMuted)
     if(havePrevious&&!memcmp(previous,data+PAYLOAD,sizeof previous))return TRUE;
     u8 target=activeSlot^1;u16 base=target*SLOT_SIZE;
     bool bus=enter();
-    SRAM_writeByte(base,0); /* invalidate first; commit magic last */
-    for(u8 i=1;i<SLOT_SIZE;i++)SRAM_writeByte(base+i,data[i]);
-    SRAM_writeByte(base,data[0]);leave(bus);
+    writeByte(base,0); /* invalidate first; commit magic last */
+    for(u8 i=1;i<SLOT_SIZE;i++)writeByte(base+i,data[i]);
+    writeByte(base,data[0]);leave(bus);
     /* CRC and commit marker are checked on the next cold boot. Do not read
      * back through a window that an SSF emulator may now map directly to ROM. */
     /* Publish the inactive mirror with the same commit-last discipline.

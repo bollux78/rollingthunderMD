@@ -1,5 +1,6 @@
 #include <genesis.h>
 #include "rt_save.h"
+#include "rt_rom_layout.h"
 
 extern u8 _start, _bend;
 extern VoidCallback *intCB;
@@ -21,6 +22,10 @@ void RT_resetMarkReady(void)
 __attribute__((externally_visible, noinline, noreturn))
 void __wrap__reset_entry(void)
 {
+#if RT_CART_EXTENDED_SSF
+    /* A reset may interrupt a save. Close the cartridge write gate first. */
+    *(vu16*)0xa130f0=0x8000;
+#endif
     RT_SaveReset saved;
     bool warm=resetCookie[0]==0x52544d44UL && resetCookie[1]==~0x52544d44UL &&
         resetCookie[2]==((u32)&_stext ^ *(const vu16 *)0x18e);

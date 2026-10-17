@@ -2,7 +2,7 @@
 #ifdef __m68k__
 u8 RT_stageBankSelect(u8 firstPage)
 {
-    if(firstPage<2 || firstPage>58 || (VDP_getReg(1)&0x40) ||
+    if(firstPage<1 || firstPage>58 || (VDP_getReg(1)&0x40) ||
        DMA_getQueueSize() || SPR_isInitialized())return 0;
     /* Packer records the physical image's inclusive end in the ROM header.
      * Reject absent pages rather than relying on emulator address wrapping. */

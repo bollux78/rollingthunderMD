@@ -11,5 +11,6 @@ jobs:
       - run: python tools/audit_repo.py
       - run: python -m compileall -q tools tests
       - run: python tests/test_cart_boot.py
+      - run: cc -Itests/host -Iinc src/pcm_rom_plan.c src/pcm_segmented_plan.c tests/test_pcm_layout.c -o /tmp/test-pcm && /tmp/test-pcm
       - run: cc -Wall -Wextra -Werror -Itests/host -Iinc src/save.c tests/test_save.c -o /tmp/test-save && /tmp/test-save
 # Building needs an owner-supplied arcade ROM. It is not stored in CI or secrets.

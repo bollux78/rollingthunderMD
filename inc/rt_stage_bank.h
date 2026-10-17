@@ -10,7 +10,9 @@
  * CPU-visible4MiB window. Out-of-image banks are rejected before mapping.
  * Stage pointers/caches become invalid across this call. Before switching,
  * terminate stage callbacks and release their references, including audio.
- * Current native gameplay does NOT yet use this experimental layout. */
+ * Compact builds place headers at generated offsets within window 2 and
+ * reserve window 7 for temporary shared-pose DMA. Window 1 may be mirrored
+ * into window 2 for compact UI assets; fixed code in windows 0/1 is unchanged. */
 #ifdef __m68k__
 u8 RT_stageBankSelect(u8 firstPage);
 #endif

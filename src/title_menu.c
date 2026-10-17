@@ -1,4 +1,5 @@
 #include "rt_title_menu.h"
+#include "rt_rom_layout.h"
 #include "rt_stage_bank_image.h"
 #include "rt_campaign_completion_scene.h"
 extern RT_CompletionScene *RT_titleMenuStorage(void);
@@ -144,7 +145,7 @@ u8 RT_titleMenuBegin(void)
  if(active)return 1;
  RT_CompletionScene *s=RT_titleMenuStorage();
  VDP_setEnable(FALSE);DMA_flushQueue();
- if(!RT_stageBankSelect(50)){rtTitleMenuFault=3;return 0;}
+ if(!RT_stageBankSelect(RT_COMPLETION_PAGE)){rtTitleMenuFault=3;return 0;}
  if(!RT_completionEndingBegin(s,0)){RT_completionSceneEnd(s);rtTitleMenuFault=10+s->fault;return 0;}
  /* Selector0 is the original console cast, with no upper scene portraits.
   * Reuse its background, native scripts, collision and split palettes. */

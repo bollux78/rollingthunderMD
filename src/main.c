@@ -1,4 +1,5 @@
 #include "rt_save.h"
+#include "rt_rom_layout.h"
 #include "rt_coop_resident_art.h"
 #include "rt_coop_resident_art.h"
 extern unsigned char rtHomeStartingCredits;
@@ -115,7 +116,7 @@ static u8 consumeFinalCommands(void)
         if(update.battle.enemies.events[i].command!=7 || rtFinalCommandSeen)continue;
         RT_gameMusicStop();
         if(!RT_beginMusicPlaybackWindows(&finalMusic,&finalSequence,&rtFinalMusicBank,7,&finalAck,vtimer,
-            RT_FINAL_VICTORY_ADDRESS,RT_FINAL_VICTORY_SAMPLES,0x2000000,1,1024,finalRegister,0))return 0;
+            RT_FINAL_VICTORY_ADDRESS,RT_FINAL_VICTORY_SAMPLES,RT_ROM_BYTES,RT_FINAL_VICTORY_WINDOWS,1024,finalRegister,0))return 0;
         rtFinalCommandSeen=1;rtFinalCommandRefresh=vtimer;
     }
     return 1;
@@ -240,7 +241,7 @@ u8 RT_prepareWorldBank(u8 story,u8 area)
     memset(&sprites,0,sizeof sprites);memset(&view,0,sizeof view);
     memset(&terrainStream,0,sizeof terrainStream);
     if(!RT_stageBankSelect(page))return 0;
-    const RT_StageBankImage *image=RT_STAGE_BANK_IMAGE;
+    const RT_StageBankImage *image=(const RT_StageBankImage*)(RT_STAGE_BANK_BASE+rtCampaignBankOffsets[story*5+area]);
     if(image->magic!=RT_STAGE_BANK_MAGIC || image->story!=story || image->area!=area ||
        !image->worldPageCount || (u32)image->worldCells<0x100000UL ||
        (u32)image->worldCells+(u32)image->worldPageCount*512>0x400000UL)return 0;
@@ -258,7 +259,7 @@ static u8 video(void){
     memset(&sprites,0,sizeof sprites);memset(&view,0,sizeof view);
     memset(&terrainStream,0,sizeof terrainStream);
     if(!RT_stageBankSelect(rtCampaignBankPages[bankIndex]))return 0;
-    const RT_StageBankImage *image=RT_STAGE_BANK_IMAGE;
+    const RT_StageBankImage *image=(const RT_StageBankImage*)(RT_STAGE_BANK_BASE+rtCampaignBankOffsets[bankIndex]);
     if(image->magic!=RT_STAGE_BANK_MAGIC)return 0;
     const RT_CampaignGraphics *graphics=image->graphics;
     const RT_DisplayPatch (*patches)[2]=image->patches;
@@ -330,7 +331,7 @@ static u8 advanceFinalAdmission(void)
             rtSession.mode==RT_MODE_ARCADE?&arcade.reserves:0,player,scene.timer.remaining))return 0;
         rtFinalVictoryServices=finalMusic.clock.services+1;
         if(!RT_beginMusicPlaybackWindows(&finalMusic,&finalSequence,&rtFinalMusicBank,9,&finalAck,vtimer,
-            RT_FINAL_ENDING_AFTER_VICTORY_ADDRESS,RT_FINAL_ENDING_AFTER_VICTORY_SAMPLES,0x2000000,2,1024,finalRegister,0))return 0;
+            RT_FINAL_ENDING_AFTER_VICTORY_ADDRESS,RT_FINAL_ENDING_AFTER_VICTORY_SAMPLES,RT_ROM_BYTES,2,1024,finalRegister,0))return 0;
         rtFinalAdmissionReady=1;rtFinalEndingStarted=vtimer;
         finalIORefresh=0;rtAppState=APP_ENDING;return 1;
     }
@@ -462,7 +463,7 @@ static u8 chooseHighPlayer(void)
             rtHighAudioRestored=0;
             if(!RT_beginSegmentedMusicPlayback(&highMusic,&highSequence,
                 rtFinalCommandSeen?&rtFinalMusicBank:&rtArcadeMusicBank,musicRequest,&highAck,vtimer,
-                (rtFinalCommandSeen?58UL:55UL)*524288,1118805,0x2000000,1024,finalRegister,0))return 0;
+                (rtFinalCommandSeen?RT_HIGH_WARM_ADDRESS:RT_HIGH_COLD_ADDRESS),1118805,RT_ROM_BYTES,1024,finalRegister,0))return 0;
             rtHighAudioStarted=vtimer;
         }
         RT_initHighScoreInput(&highInput);rtHighPlayer=highPlayer;
@@ -478,14 +479,14 @@ static u8 beginHighEntry(void)
     endFinalFlow();endHud();VDP_setEnable(FALSE);
     if(finalMusic.active && !RT_stopMusicPlaybackCommand(&finalMusic,&finalAck))return 0;
     DMA_flushQueue();
-    if(!RT_stageBankSelect(54))return 0;
+    if(!RT_stageBankSelect(RT_HIGH_SCORE_PAGE))return 0;
     static const RT_SceneBackground background={
-        (const u32 *)(0x100000UL+4176),
+        (const u32 *)(RT_HIGH_SCORE_BASE+4176),
         (const u16 (*)[1008])RT_HIGH_MAPS_ADDRESS,
-        (const u16 (*)[64])(0x100000UL+16),610,0,0};
+        (const u16 (*)[64])(RT_HIGH_SCORE_BASE+16),610,0,0};
     if(!RT_sceneBackgroundUpload(&background))return 0;
     highUpload=(RT_GameOverPanelUpload){0};
-    if(!RT_beginGameOverPanelUpload(&highUpload,(const u8 *)0x100000UL,RT_HIGH_SCENE_BYTES,
+    if(!RT_beginGameOverPanelUpload(&highUpload,(const u8 *)RT_HIGH_SCORE_BASE,RT_HIGH_SCENE_BYTES,
         (const u8 *)RT_HIGH_PANEL_ADDRESS,RT_HIGH_PANEL_BYTES,0))return 0;
     while(!highUpload.ready){
         if(!RT_queueGameOverPanelPatterns(&highUpload,2048))return 0;

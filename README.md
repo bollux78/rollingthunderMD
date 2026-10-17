@@ -1,7 +1,6 @@
 # Rolling Thunder MD
 
-Native Mega Drive / Genesis port of Rolling Thunder, frozen at the October 16,
-2026 development build. Includes Arcade, Home Campaign and Survival, two-player
+Native Mega Drive / Genesis port of Rolling Thunder, updated October 17, 2026. Includes Arcade, Home Campaign and Survival, two-player
 co-op, the HUD and shirt-colour fixes, increased co-op ammunition, and adaptive
 2P enemy animation. Enemy counts are unchanged.
 
@@ -21,8 +20,7 @@ voice samples, or rendered music clips are included. You must supply your own
 **Rolling Thunder revision 3 arcade `rthunder.zip`** to regenerate the audio.
 There are no ROM downloads in the build process. Input chip hashes are checked.
 The Sega splash/chant and Namcot splash/logo are omitted entirely; the binary
-boots directly into the game menu. The `SEGA MEGA DRIVE` cartridge-header
-identifier is format metadata, not a logo asset.
+boots directly into the game menu. Cartridge-header identifiers are format metadata, not logo assets.
 
 ## Build
 
@@ -54,7 +52,7 @@ are ignored. The build reads the supplied archive; it never modifies it.
 
 Outputs:
 
-- `dist/RollingThunderMD.bin` — 32 MiB standard-SSF2 development cartridge
+- `dist/RollingThunderMD.bin` — 15.5 MiB standard-SSF2 cartridge for the tested emulators
 - `dist/SHA256SUMS` — binary checksum
 - `dist/build.json` — build identity and validation metadata
 
@@ -67,22 +65,36 @@ The audio build decodes the arcade samples, converts the source music records,
 and synthesizes the finite ending/high-score clips with pinned ymfm source.
 Every stage bank and finite audio clip is checked against the frozen baseline.
 Native runtime and Z80 drivers are compiled from source, then the cartridge
-banks are assembled from those new outputs.
+banks are assembled from those new outputs. The compact packer then checks all
+four audio placements with the runtime planners and independently verifies linked
+pose pixels, geometry, background maps and world collision data.
 
 ## Playing and validation
 
-Use an emulator with **32 MiB standard SSF2 banking and SRAM support**.
-PicoDrive and Genesis Plus GX are tested.
-A 4 MiB-only loader cannot run this cartridge. **The current image is not ready
-for EverDrive/original-console release:** it exceeds the documented capacities
-of current EverDrive models. The former GX SRAM/boot failure is fixed; actual
-flash-cart mapper support still needs validation after repacking. See the [hardware compatibility audit](docs/HARDWARE_COMPATIBILITY.md)
-for Side Arms comparisons, remaining limits and outstanding hardware tests.
-This is a development build, not a full-game release certification.
+The default profile is tested in PicoDrive and Genesis Plus GX with standard
+SSF2 banking and SRAM. Build the separate **Mega EverDrive Pro** profile with:
+
+```sh
+python tools/build.py --rom /path/to/your/rthunder.zip --sgdk "$GDK" --cart mega-everdrive-pro
+```
+
+This adds `dist/RollingThunderMD-MegaEverDrivePro.bin` and
+`dist/build-mega-everdrive-pro.json`. It uses extended SSF banking and banked
+battery RAM, and leaves physical bank 31 reserved for saves. Both profiles are
+15.5 MiB. **The Pro profile has software protocol tests, but no physical-cart
+validation.** The image does not fit Core/X3/X5; no X7/legacy-cart support is
+claimed. See the [hardware matrix](docs/HARDWARE_COMPATIBILITY.md).
+
+The compact build shares identical raw graphics and geometry and packs map
+blocks. It preserves enemy counts, animation policy and audio; it does not
+introduce runtime graphics decompression. All linked pose pixels and packed
+geometry are compared with the frozen reference during every build. Use
+`--layout frozen` only to build the older 32 MiB layout for comparison.
+
 Standard Genesis controller inputs are used; Home's setup lets
 player two join before choosing the characters.
 
-The frozen adaptive build passed 48 opening performance runs, 20 stage/checkpoint
+The historical adaptive baseline passed 48 opening performance runs, 20 stage/checkpoint
 entry probes, 3,550 matched gameplay-state comparisons and 862 unchanged 1P
 image comparisons. Average 2P displayed rates were 54.49 FPS in Campaign and
 43.09 FPS in Survival. These include presentations reusing artwork; they are not
@@ -101,13 +113,12 @@ entry and when you pause. Pause before powering off to save an ongoing run's
 best score. Progress/lives are not resumed from SRAM. Empty or invalid SRAM
 uses defaults; two CRC-checked slots protect against interrupted writes. Enable
 battery saves in your emulator and retain its `.srm` file. Soft reset returns to the menu and restores the last committed save, including
-after playing or pausing. The cartridge currently requires
-standard SSF2 banking **and** standard odd-byte SRAM at `$200001–$20FFFF`.
-This combination is validated in PicoDrive and Genesis Plus GX. An extended
-EverDrive SSF profile would need its own banked-save implementation.
+after playing or pausing. The default profile uses standard SSF2 banking and odd-byte SRAM at
+`$200001–$20FFFF`. The Pro profile uses a separate banked-save implementation;
+its physical persistence still needs testing.
 
 The public build removes boot intros, updates the cartridge title, and adds
-SRAM saves and Start pause. The frozen banked art/audio remain unchanged. See
+SRAM saves and Start pause. The rendered art and audio remain unchanged despite their new storage layout. See
 `docs/VALIDATION.md` for checks specific to the public build.
 
 ## Source layout
