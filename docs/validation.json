@@ -1,0 +1,73 @@
+{
+  "rom_sha256": "ecfd1197b63637af134888e833e53a90a1c023f99fa356128d1768c5a5ee279d",
+  "refreshes_per_run": 4200,
+  "cases": {
+    "campaign_1p_0": {
+      "play_refreshes": 3323,
+      "runtime_faults": 0,
+      "policy_values": [
+        0
+      ]
+    },
+    "campaign_1p_1": {
+      "play_refreshes": 3323,
+      "runtime_faults": 0,
+      "policy_values": [
+        0
+      ]
+    },
+    "campaign_2p_0": {
+      "play_refreshes": 2633,
+      "runtime_faults": 0,
+      "policy_values": [
+        0,
+        1
+      ]
+    },
+    "campaign_2p_1": {
+      "play_refreshes": 2310,
+      "runtime_faults": 0,
+      "policy_values": [
+        0,
+        1
+      ]
+    },
+    "survival_1p_0": {
+      "play_refreshes": 1992,
+      "runtime_faults": 0,
+      "policy_values": [
+        0
+      ]
+    },
+    "survival_1p_1": {
+      "play_refreshes": 1992,
+      "runtime_faults": 0,
+      "policy_values": [
+        0
+      ]
+    },
+    "survival_2p_0": {
+      "play_refreshes": 1441,
+      "runtime_faults": 0,
+      "policy_values": [
+        0,
+        1
+      ]
+    },
+    "survival_2p_1": {
+      "play_refreshes": 1303,
+      "runtime_faults": 0,
+      "policy_values": [
+        0,
+        1
+      ]
+    }
+  },
+  "scope": "Unmodified clean-checkout production ROM; controller-only Home Campaign/Survival, both agents, 1P/2P; no RAM patches. Opening smoke coverage, not full-game or hardware certification.",
+  "clean_checkout_reproduced": true,
+  "banked_bytes_identical_to_frozen_build": true,
+  "banked_bytes_compared": 32505856,
+  "intro_symbols_absent": true,
+  "cartridge_title": "ROLLING THUNDER MD",
+  "bytes": 33554432
+}
