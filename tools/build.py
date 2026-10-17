@@ -108,7 +108,7 @@ def main():
  place(50,completion)
  high=json.loads((ROOT/'assets/ui/high_score.json').read_text());place(54,b''.join(struct.pack('>'+str(len(high[n]))+'H',*high[n]) for n in ['scene','panel','maps']))
  for page,data in audio.items():place(page,data)
- raw[0x100:0x110]=b'SEGA SSF        ';raw[0x1a4:0x1a8]=struct.pack('>I',len(raw)-1);raw[0x1b0:0x1bc]=b' '*12;raw[0x18e:0x190]=struct.pack('>H',sum(struct.unpack('>'+str((len(raw)-512)//2)+'H',raw[512:]))&65535)
+ raw[0x100:0x110]=b'SEGA SSF        ';raw[0x1a4:0x1a8]=struct.pack('>I',len(raw)-1);raw[0x1b0:0x1bc]=b'RA'+struct.pack('>HII',0xf820,0x200001,0x20ffff);raw[0x18e:0x190]=struct.pack('>H',sum(struct.unpack('>'+str((len(raw)-512)//2)+'H',raw[512:]))&65535)
  dist=ROOT/'dist';dist.mkdir(exist_ok=True);dest=dist/'RollingThunderMD.bin';dest.write_bytes(raw)
  report=dict(sha256=digest(raw),bytes=len(raw),fixed_span=span,sgdk_version='2.12',compiler=run([sdk/'bin/m68k-elf-gcc','-dumpfullversion']).strip(),stage_banks_reproduced=10,boot_intros=False,rom_archives_distributed=False)
  (dist/'build.json').write_text(json.dumps(report,indent=2)+'\n');(dist/'SHA256SUMS').write_text(report['sha256']+'  '+dest.name+'\n');print(str(dest)+'\nSHA256 '+report['sha256'],flush=True)

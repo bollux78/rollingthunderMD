@@ -1,3 +1,4 @@
+#include "rt_save.h"
 #include "rt_coop_resident_art.h"
 #include "rt_coop_resident_art.h"
 extern unsigned char rtHomeStartingCredits;
@@ -78,6 +79,9 @@ static u32 readyStarted;
 static u32 lastRefresh;
 static RT_FramePacer pacer;
 static u8 tick;
+volatile u8 rtAppPaused;
+static u16 pausePrevious[2],pausePalette[64];
+static void saveProgress(void);
 static u16 held;
 static RT_MusicPlayback highMusic;
 static RT_MusicSequence highSequence;
@@ -200,6 +204,7 @@ static void endHud(void){
     RT_gameMusicStop();
     RT_spritesDiscardPrepared();
     endPipeline();
+    DMA_flushQueue();saveProgress();
 #ifdef RT_GAMEPLAY_HUD
     RT_campaignHudDisplayEnd(&hudDisplay);
 #endif
@@ -363,6 +368,12 @@ static u8 advanceFinalEnding(void)
 
 /* Source qualification/initials routines with native ROM-bank/VDP ownership. */
 static u8 highRecords[50],highPanel[672],highScores[8],highPlayer,highRemaining,highArea;
+static void saveProgress(void)
+{
+    /* Entry IRQ owns the table until its current initials are complete. */
+    if(highRecords[0x2d])return;
+    RT_saveStore(highRecords,score.high,rtHomeStartingCredits,RT_gameMusicPsgMuted());
+}
 static RT_HighScoreInput highInput;
 static RT_GameOverPanelUpload highUpload;
 static u8 highPublished[672];
@@ -505,7 +516,7 @@ static u8 stepHighEntry(const u16 pads[2])
         while(r==RT_MUSIC_REFRESH_PENDING);
         if(r==RT_MUSIC_REFRESH_FAULT)return 0;
     }
-    if(!highClockRunning)return chooseHighPlayer();
+    if(!highClockRunning){saveProgress();return chooseHighPlayer();}
     return publishHighPanel();
 }
 
@@ -537,7 +548,10 @@ int main(bool hardReset){
     (void)hardReset;rtAppUpdates=rtAppPresentations=rtAppRefreshes=0;rtAppFault=0;
     rtAppSkippedPresentations=rtAppMaxUpdateLag=0;
     u8 initialHigh[3];if(!RT_initializeHighScores(highRecords,initialHigh))return 0;score.high=3000;
-    RT_resetSession();menu();
+    RT_resetSession();
+    u8 muted=0;
+    RT_saveLoad(highRecords,&score.high,&rtHomeStartingCredits,&muted);
+    RT_gameMusicSetPsgMuted(muted);menu();
     while(TRUE){
         if(finalMusic.active && !serviceFinalMusic()){
             rtAppFault=92;notice("AUDIO ERROR","SOURCE CLOCK",APP_UNFINISHED);continue;
@@ -552,9 +566,30 @@ int main(bool hardReset){
             continue;
         }
         u16 pads[2]={JOY_readJoypad(JOY_1),JOY_readJoypad(JOY_2)};
+        u16 startEdge=(pads[0]&~pausePrevious[0]) |
+            (RT_isCoop()?(pads[1]&~pausePrevious[1]):0);
+        pausePrevious[0]=pads[0];pausePrevious[1]=pads[1];
+        if(rtAppState==APP_PLAY && (startEdge&BUTTON_START)){
+            finishPipeline();DMA_flushQueue();
+            rtAppPaused^=1;
+            if(rtAppPaused){
+                saveProgress();PAL_getColors(0,pausePalette,64);
+                u16 dim[64];for(u8 i=0;i<64;i++)dim[i]=(pausePalette[i]>>1)&0x666;
+                PAL_setColors(0,dim,64,CPU);
+            }else{
+                PAL_setColors(0,pausePalette,64,CPU);
+                lastRefresh=vtimer;RT_framePacerReset(&pacer,lastRefresh);
+                for(u8 p=0;p<2;p++)scene.players.previousButtons[p]=pads[p];
+            }
+        }
+        if(rtAppPaused){
+            u32 now=vtimer;while(vtimer==now){__asm__ volatile("nop");}
+            continue;
+        }
         if(rtAppState==APP_HIGH_ENTRY){if(!stepHighEntry(pads)){rtAppFault=97;notice("HIGH SCORE ERROR","ENTRY",APP_UNFINISHED);}continue;}
         if(rtAppState==APP_MENU){
-            if(RT_stepModeSelect(pads[0],pads[1])){RT_titleMenuEnd();start();}
+            if(RT_stepModeSelect(pads[0],pads[1])){saveProgress();RT_titleMenuEnd();start();}
+            else saveProgress();
             if(rtAppState==APP_MENU){RT_drawModeSelect();if(!RT_titleMenuActive())SYS_doVBlankProcess();}
             continue;
         }

@@ -84,8 +84,24 @@ image comparisons. Average 2P displayed rates were 54.49 FPS in Campaign and
 fresh-animation rates or a guarantee of 60 FPS. Restoring light-scene animation
 costs about 1–1.5 FPS compared with permanently compact detail.
 
-The public build removes the boot intros and updates the cartridge title. It
-retains the frozen gameplay source and exact banked content. See
+**Start pauses/resumes gameplay** in Arcade and Home. Either controller can
+pause a 2P game; controller two is ignored for pause in solo. The screen dims,
+gameplay and its timer freeze, and music continues. Menu confirmation and
+Continue retain their existing Start behavior.
+
+**Battery-backed SRAM** stores the best score, the five-record initials table,
+starting credits and the sound test's PSG mute setting. Settings save when
+changed; scores save at life/stage boundaries, game over, completed initials
+entry and when you pause. Pause before powering off to save an ongoing run's
+best score. Progress/lives are not resumed from SRAM. Empty or invalid SRAM
+uses defaults; two CRC-checked slots protect against interrupted writes. Enable
+battery saves in your emulator and retain its `.srm` file. In the tested PicoDrive
+core, reload the ROM to restore saves; soft reset does not restore SRAM after
+SSF bank remapping. The cartridge requires
+SSF banking **and** standard odd-byte SRAM at `$200001–$20FFFF`.
+
+The public build removes boot intros, updates the cartridge title, and adds
+SRAM saves and Start pause. The frozen banked art/audio remain unchanged. See
 `docs/VALIDATION.md` for checks specific to the public build.
 
 ## Source layout

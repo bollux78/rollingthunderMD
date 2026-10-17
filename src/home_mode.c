@@ -282,7 +282,7 @@ void RT_drawModeSelect(void)
             panel(5,17,30,9,"CONTROLS");
             textAt("D-PAD  MOVE / CROUCH",8,19);
             textAt("A  JUMP    B  FIRE",8,21);
-            textAt("UP  ENTER DOOR",8,23);
+            textAt("UP  DOOR   START  PAUSE",8,23);
             textAt("B BACK",17,27);
         }
         else if (page==GAME_OVER) {
