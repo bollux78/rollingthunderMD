@@ -20,7 +20,9 @@ From a clone of the complete fork:
 
 ```fish
 cd ~/Projetos/rollingthunderMD
-python -m pip install --user Pillow
+python -m venv .venv
+source .venv/bin/activate.fish
+python -m pip install Pillow
 python tools/rolling_dither_lab.py --self-test
 python tools/rolling_dither_lab.py
 ```
