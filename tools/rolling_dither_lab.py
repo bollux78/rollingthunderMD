@@ -119,7 +119,9 @@ def render_sprite(pixels, prom: bytes, group: int, mode: str):
     # Source pen 15 is transparent, so only 15 entries may be dithered.
     sources = [palette[256 + lookup[group * 16 + pen]] for pen in range(15)]
     targets = [rgb333(c) for c in sources]
-    pairs = [choose_pair(src, targets, mode) for src in sources]
+    # Original must preserve each source pen, even if another pen has equal RGB333.
+    pairs = ([(pen, pen, 0) for pen in range(15)] if mode == "Original"
+             else [choose_pair(src, targets, mode) for src in sources])
     image = Image.new("RGB", (32, 32))
     out = image.load()
     changed = 0
